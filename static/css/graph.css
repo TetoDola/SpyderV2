@@ -1,0 +1,138 @@
+/* Minimal overrides — Tailwind handles most styling */
+
+/* Badge type colors */
+.badge {
+  padding: 2px 10px;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+
+.badge-PERSON  { background: #3b82f6; color: #fff; }
+.badge-COMPANY { background: #22c55e; color: #fff; }
+.badge-MEETING { background: #f59e0b; color: #fff; }
+
+/* Property rows */
+.prop-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.prop-row input {
+  flex: 1;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 13px;
+  outline: none;
+  transition: background 0.15s;
+}
+
+.prop-row input:hover,
+.prop-row input:focus {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.prop-row input:focus {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.prop-row input::placeholder {
+  color: rgba(255, 255, 255, 0.15);
+}
+
+.prop-row .prop-key {
+  max-width: 120px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+}
+
+.prop-row .prop-delete {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.prop-row .prop-delete:hover {
+  color: #ef4444;
+}
+
+/* Mention dropdown items */
+.mention-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: background 0.1s;
+}
+
+.mention-item:hover,
+.mention-item.active {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.mention-item .mention-title {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.mention-item .mention-type {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* force-graph canvas override */
+#graph-canvas canvas {
+  outline: none;
+}
+
+/* Markdown preview prose overrides */
+#peek-notes-preview h1 { font-size: 1.5em; font-weight: 700; margin: 0.8em 0 0.4em; }
+#peek-notes-preview h2 { font-size: 1.25em; font-weight: 600; margin: 0.7em 0 0.35em; }
+#peek-notes-preview h3 { font-size: 1.1em; font-weight: 600; margin: 0.6em 0 0.3em; }
+#peek-notes-preview p { margin: 0.5em 0; }
+#peek-notes-preview ul,
+#peek-notes-preview ol { padding-left: 1.5em; margin: 0.5em 0; }
+#peek-notes-preview li { margin: 0.2em 0; }
+#peek-notes-preview code {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+#peek-notes-preview pre {
+  background: rgba(255, 255, 255, 0.04);
+  padding: 0.8em 1em;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0.6em 0;
+}
+#peek-notes-preview pre code {
+  background: none;
+  padding: 0;
+}
+#peek-notes-preview blockquote {
+  border-left: 3px solid rgba(255, 255, 255, 0.15);
+  padding-left: 1em;
+  color: rgba(255, 255, 255, 0.5);
+  margin: 0.5em 0;
+}
+#peek-notes-preview a {
+  color: #60a5fa;
+  text-decoration: underline;
+}

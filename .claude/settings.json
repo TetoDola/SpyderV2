@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv sync)",
+      "Bash(uv run python manage.py makemigrations network_graph)",
+      "Bash(uv run python manage.py migrate)",
+      "Bash(uv run python manage.py check)",
+      "Bash(uv run python manage.py runserver)",
+      "Bash(uv add pillow)"
+    ]
+  }
+}
