@@ -10,3 +10,15 @@ media/
 *.egg
 dist/
 .env
+.claude/
+*.log
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.coverage
+htmlcov/
+node_modules/
+build/

@@ -6,7 +6,12 @@
       "Bash(uv run python manage.py migrate)",
       "Bash(uv run python manage.py check)",
       "Bash(uv run python manage.py runserver)",
-      "Bash(uv add pillow)"
+      "Bash(uv add pillow)",
+      "Bash(uv add python-frontmatter)",
+      "Bash(uv run python -m py_compile apps/network_graph/views.py)",
+      "Read(//c/Users/Teto/Documents/Spyder/Entities/**)",
+      "Bash(uv run python -m py_compile apps/network_graph/parser.py)",
+      "Bash(uv run python manage.py shell -c \":*)"
     ]
   }
 }

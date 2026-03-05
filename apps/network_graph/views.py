@@ -1,5 +1,7 @@
 import json
+import re
 
+import frontmatter
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.csrf import csrf_exempt
@@ -7,6 +9,10 @@ from django.views.decorators.http import require_GET, require_http_methods
 
 from apps.network_graph.models import Connection, Node, NodeTemplate
 from apps.network_graph.parser import process_auto_links
+
+# Regex to translate Obsidian [[Link]] to @[Link] (bracket-delimited)
+# Negative lookbehind skips image embeds ![[image.jpg]]
+OBSIDIAN_LINK_RE = re.compile(r"(?<!!)\[\[([^\]]+)\]\]")
 
 
 @require_GET
@@ -234,4 +240,109 @@ def api_templates(request: HttpRequest) -> JsonResponse:
         "node_type": template.node_type,
         "default_properties": template.default_properties,
         "default_notes": template.default_notes,
+    })
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def api_import_nodes(request: HttpRequest) -> JsonResponse:
+    """Import a batch of Markdown files as nodes.
+
+    Translates Obsidian [[Link]] syntax to @Link for auto-linking.
+    Extracts YAML frontmatter into properties. Deduplicates by title.
+    """
+    files = request.FILES.getlist("files")
+    if not files:
+        return JsonResponse({"error": "No files provided"}, status=400)
+
+    created_count = 0
+    updated_count = 0
+    processed_nodes: list[Node] = []
+
+    for f in files:
+        raw_content = f.read().decode("utf-8", errors="replace")
+
+        # Parse frontmatter
+        post = frontmatter.loads(raw_content)
+        metadata: dict[str, object] = dict(post.metadata) if post.metadata else {}
+        body: str = post.content
+
+        # Translate [[Link]] -> @[Link]  (bracket-delimited for special chars)
+        body = OBSIDIAN_LINK_RE.sub(r"@[\1]", body)
+
+        # Remove image embeds  ![[file.jpg]] -> empty
+        body = re.sub(r"!\[\[([^\]]+)\]\]", "", body)
+
+        # Title: from frontmatter 'title' key, or filename without .md
+        title = str(metadata.pop("title", "")).strip()
+        if not title:
+            filename = f.name or ""
+            # Strip path components (browser may send full relative path)
+            filename = filename.replace("\\", "/").split("/")[-1]
+            title = filename.removesuffix(".md").strip()
+        if not title:
+            continue
+
+        # Node type from frontmatter — support common aliases
+        _TYPE_ALIASES: dict[str, str] = {
+            "PERSON": "PERSON", "PEOPLE": "PERSON", "CONTACT": "PERSON",
+            "COMPANY": "COMPANY", "ORG": "COMPANY", "ORGANIZATION": "COMPANY",
+            "ORGANISATION": "COMPANY", "BUSINESS": "COMPANY", "TEAM": "COMPANY",
+            "MEETING": "MEETING", "EVENT": "MEETING", "CALL": "MEETING",
+        }
+        raw_type = str(metadata.pop("node_type", metadata.pop("type", "PERSON"))).upper()
+        node_type = _TYPE_ALIASES.get(raw_type, "PERSON")
+
+        # Remaining frontmatter becomes properties — skip None/empty, flatten lists
+        def _coerce(v: object) -> str | None:
+            if v is None:
+                return None
+            if isinstance(v, list):
+                joined = ", ".join(str(i) for i in v if i is not None)
+                return joined if joined else None
+            s = str(v).strip()
+            return s if s else None
+
+        properties = {k: coerced for k, v in metadata.items() if (coerced := _coerce(v)) is not None}
+
+        # Deduplication: match by title only (catches ghosts regardless of type)
+        existing = Node.objects.filter(title__iexact=title).first()
+
+        if existing:
+            # Promote ghost → real node with correct type and content
+            if existing.is_ghost:
+                existing.is_ghost = False
+                existing.node_type = node_type
+                existing.notes = body
+                existing.properties = properties
+            else:
+                # Append imported notes to existing real node
+                separator = "\n\n---\n\n" if existing.notes.strip() else ""
+                existing.notes = existing.notes + separator + body
+                # Merge properties (don't overwrite existing keys)
+                for key, val in properties.items():
+                    if key not in existing.properties:
+                        existing.properties[key] = val
+            existing.save()
+            processed_nodes.append(existing)
+            updated_count += 1
+        else:
+            node = Node.objects.create(
+                title=title,
+                node_type=node_type,
+                properties=properties,
+                notes=body,
+                is_ghost=False,
+            )
+            processed_nodes.append(node)
+            created_count += 1
+
+    # Run auto-linking for all processed nodes
+    for node in processed_nodes:
+        process_auto_links(node)
+
+    return JsonResponse({
+        "created": created_count,
+        "updated": updated_count,
+        "total": created_count + updated_count,
     })

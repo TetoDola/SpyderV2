@@ -16,4 +16,5 @@ urlpatterns = [
     path("api/nodes/<str:node_id>/delete/", views.api_node_delete, name="api-node-delete"),
     path("api/nodes/<str:node_id>/image/", views.api_node_image, name="api-node-image"),
     path("api/templates/", views.api_templates, name="api-templates"),
+    path("api/import/", views.api_import_nodes, name="api-import"),
 ]

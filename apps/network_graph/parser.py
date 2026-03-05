@@ -4,15 +4,24 @@ import re
 
 from apps.network_graph.models import Connection, Node
 
-# Matches @Name until a delimiter: comma, period, newline, end-of-string, or another @
-# Supports multi-word names like @Aldrin Ong
-MENTION_RE = re.compile(r"@([\w][\w ]*?)(?=[,.\n@]|$)", re.UNICODE)
+# Two patterns:
+# 1. @[Complex Name (with parens, dots, etc.)] — bracket-delimited (from Obsidian import)
+# 2. @Simple Name — word chars and spaces until a delimiter (from UI @mentions)
+MENTION_RE = re.compile(
+    r"@\[([^\]]+)\]|@([\w][\w ]*?)(?=[,.\n@]|$)", re.UNICODE
+)
 
 
 def extract_mentions(text: str) -> list[str]:
     """Return all unique mentioned titles from @ syntax."""
-    raw = MENTION_RE.findall(text)
-    return list(dict.fromkeys(name.strip() for name in raw if name.strip()))
+    raw = MENTION_RE.findall(text)  # list of (bracket_match, simple_match)
+    return list(
+        dict.fromkeys(
+            (bracket or simple).strip()
+            for bracket, simple in raw
+            if (bracket or simple).strip()
+        )
+    )
 
 
 def _collect_desired_connections(
@@ -49,10 +58,14 @@ def sync_connections(node: Node) -> None:
     target_map: dict[str, Node] = {}
     for title, _label in desired:
         if title not in target_map:
-            target_node, _ = Node.objects.get_or_create(
-                title=title,
-                defaults={"node_type": "PERSON", "is_ghost": True},
-            )
+            # Case-insensitive lookup to avoid duplicate ghosts
+            target_node = Node.objects.filter(title__iexact=title).first()
+            if not target_node:
+                target_node = Node.objects.create(
+                    title=title,
+                    node_type="PERSON",
+                    is_ghost=True,
+                )
             target_map[title] = target_node
 
     # Build desired set as (target_id, label)
