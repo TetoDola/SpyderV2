@@ -3,7 +3,7 @@
 > Personal CRM that passively builds a knowledge graph of everyone you know.
 > Voice note / document dropped in → transcribed → entities extracted → graph updated → richer context next time.
 
-**MVP Scope**: PERSON + MEETING nodes only. Voice note/text ingestion. Two-level summaries (per-meeting, per-person).
+**MVP Scope**: PERSON, COMPANY, and MEETING nodes. Three separate ingestion paths (voice notes, documents, freeform notes). Three-level summaries (per-meeting, per-person, per-company).
 
 ---
 
@@ -36,7 +36,7 @@
 | Resolution Queue model + API | Ghost nodes exist but there's no queue for user confirmation. |
 | DSL/Cipher layer | Database mutations happen via direct ORM calls everywhere. No abstraction layer. |
 | Summarization storage | No summary fields on nodes. Notes field exists but isn't structured for AI summaries. |
-| Graph schema contract | No specification of what a PERSON or MEETING node must contain. Silent data loss risk between extraction and storage. |
+| Graph schema contract | No specification of what a PERSON, COMPANY, or MEETING node must contain. Silent data loss risk between extraction and storage. |
 | Environment file | No `.env` or `.env.example`. |
 | Tests directory | Zero tests despite pytest being configured. |
 | Celery config (broker, worker) | No `celery.py`, no broker URL, no task modules. |
@@ -47,10 +47,10 @@
 |---|---|---|
 | `apps/network_graph/models.py` | Add `Ingestion`, `ResolutionCandidate` models. Add `summary` JSONField to `Node`. | Need ingestion tracking, resolution queue, and structured summaries. |
 | `apps/network_graph/parser.py` | Extract the `sync_connections` logic into the DSL layer. Parser stays, but writes go through DSL. | Critical rule: nothing touches DB directly. |
-| `apps/network_graph/views.py` | Add ingestion upload endpoint. Modify `api_import_nodes` to route through pipeline. Add resolution queue endpoints. | New entry points for the pipeline. |
+| `apps/network_graph/views.py` | Add three separate ingestion endpoints (voice, document, freeform). Modify `api_import_nodes` to route through pipeline. Add resolution queue endpoints. | New entry points for the pipeline — one per source type. |
 | `config/settings.py` | Add Celery config, LLM API keys from env, new app registrations. | Infrastructure for async + AI. |
 | `pyproject.toml` | Add `celery`, `redis`, `anthropic`/`openai`, `python-docx`, `pdfplumber` dependencies. | New capabilities. |
-| `templates/network_graph/index.html` | Add ingestion upload zone, review card panel, resolution queue modal. | UX for new pipeline inputs and outputs. |
+| `templates/network_graph/index.html` | Add ingestion upload zones, review card panel, resolution queue modal. | UX for new pipeline inputs and outputs. |
 
 ---
 
@@ -69,9 +69,9 @@
 - Create `.env` (gitignored) with dev defaults
 - Update `settings.py` to use `django-environ`
 
-**Task 0.2 — Keep PERSON and MEETING node types only**
-- No new NodeType choices for MVP. PERSON and MEETING are sufficient.
-- Company and title are stored as **properties on PERSON nodes**, not separate COMPANY nodes.
+**Task 0.2 — Node types: PERSON, COMPANY, MEETING**
+- All three existing node types stay. No new types needed for MVP.
+- COMPANY is a first-class node — extracted companies create COMPANY nodes, linked to PERSON nodes via WORKS_AT edges.
 
 **Task 0.3 — Add `summary` JSONField to Node**
 - Structured JSON summary field, separate from `notes` (user-written content)
@@ -87,6 +87,7 @@
   - `dsl_commands`: JSONField (graph writing log)
   - `status`: CharField (`PENDING`, `TRANSCRIBING`, `EXTRACTING`, `RESOLVING`, `WRITING`, `SUMMARIZING`, `COMPLETE`, `FAILED`)
   - `error_message`: TextField (blank)
+  - `failed_step`: CharField (nullable — which step failed, for retry-from)
   - `created_at`, `completed_at`: DateTimeFields
 - Migration
 
@@ -112,7 +113,7 @@
 - Create empty `apps/network_graph/tasks.py`
 
 **Task 0.7 — Seed import (cold start solution)**
-- **Contacts CSV import** — Google Contacts or LinkedIn export. Parse name, email, company (as PERSON property), title. Create PERSON nodes via DSL. Gives 50-500 nodes immediately.
+- **Contacts CSV import** — Google Contacts or LinkedIn export. Parse name, email, company, title. Creates PERSON nodes + COMPANY nodes via DSL. Gives 50-500 nodes immediately.
 - **Bulk note import** — existing Obsidian `[[Link]]` translator. Dump markdown notes, run through pipeline.
 - **Manual quick-add** — fast form: name, email, one-line context. Creates PERSON node instantly.
 - New endpoint: `POST /api/import/contacts/` (accepts CSV)
@@ -120,25 +121,36 @@
 
 **Task 0.8 — Graph schema definition**
 - New file: `apps/network_graph/schema.py`
-- Defines what PERSON and MEETING nodes must contain:
+- Defines what PERSON, COMPANY, and MEETING nodes must contain:
 
 ```
 PERSON node properties:
   System-locked (existing):
+    - First Name
+    - Last Name
     - Email           — canonical identifier
     - Phone Number    — secondary identifier
   Pipeline-populated:
     - Title           — job title, extracted from context
-    - Company         — company name as string property (NOT a separate node)
     - First Met       — date of earliest ingestion mentioning them
     - Last Interaction — date of most recent ingestion
     - Interaction Count — total ingestions mentioning them
 
-MEETING node properties:
-  System-locked:
-    - Date
-    - Source Type      — voice_note / document / freeform_note
+COMPANY node properties:
+  System-locked (existing):
+    - Company Name
+    - Website
+    - Phone Number
   Pipeline-populated:
+    - Industry        — extracted from context if mentioned
+    - Employee Count  — number of PERSON nodes linked via WORKS_AT
+
+MEETING node properties:
+  System-locked (existing):
+    - Date
+    - Attendees
+  Pipeline-populated:
+    - Source Type      — voice_note / document / freeform_note
     - Participants     — list of PERSON node IDs (also captured as edges)
     - Key Points       — from meeting summary
     - Decisions        — from meeting summary
@@ -147,6 +159,8 @@ MEETING node properties:
 Edge types:
   - ATTENDED    (person → meeting)
   - KNOWS       (person ↔ person, with context label)
+  - WORKS_AT    (person → company)
+  - DISCUSSED   (meeting → company, when company is discussed in a meeting)
 ```
 
 - DSL `create_node()` validates properties against schema
@@ -184,53 +198,82 @@ Edge types:
 ### Phase 2: Ingestion & Transcription (Step 1)
 
 > Depends on: Phase 0 (Ingestion model, Celery)
+>
+> **Each source type has its own endpoint, service, and Celery task.** They share the downstream pipeline (extraction → resolution → writing → summarization) but the ingestion step is fully separated.
 
-**Task 2.1 — File upload endpoint**
-- New view: `api_ingest(request)` — POST multipart
-- Accepts: audio files (`.m4a`, `.mp3`, `.wav`, `.ogg`), documents (`.pdf`, `.docx`, `.txt`, `.md`), freeform text (JSON body with `text` field)
-- Creates `Ingestion` record with `status=PENDING`
-- Dispatches Celery task
+**Task 2.1 — Voice note ingestion**
+- New endpoint: `POST /api/ingest/voice/` — accepts audio upload (`.m4a`, `.mp3`, `.wav`, `.ogg`)
+- Creates `Ingestion` record with `source_type=VOICE_NOTE`, `status=PENDING`
+- Dispatches `process_voice_note` Celery task
 - Returns `{ingestion_id, status}` immediately
+- New service: `apps/network_graph/services/ingest_voice.py`
+  - Wraps the existing TTS API for transcription
+  - Input: audio file path → Output: plain text
+  - Fallback: OpenAI Whisper API as backup
+  - Stores `raw_text` on Ingestion, updates status → `EXTRACTING`
+- Celery task: `process_voice_note(ingestion_id)`
+  - Saves audio file to media
+  - Calls transcription service
+  - Chains to shared extraction task
+  - Retry: 3x, exponential backoff (network call)
 
-**Task 2.2 — Transcription service**
-- New file: `apps/network_graph/services/transcription.py`
-- Wraps the existing TTS API
-- Input: audio file path → Output: plain text
-- Fallback: OpenAI Whisper API as backup
+**Task 2.2 — Document ingestion**
+- New endpoint: `POST /api/ingest/document/` — accepts file upload (`.pdf`, `.docx`, `.txt`, `.md`)
+- Creates `Ingestion` record with `source_type=DOCUMENT`, `status=PENDING`
+- Dispatches `process_document` Celery task
+- Returns `{ingestion_id, status}` immediately
+- New service: `apps/network_graph/services/ingest_document.py`
+  - PDF → `pdfplumber` → plain text
+  - DOCX → `python-docx` → plain text
+  - TXT → read as-is
+  - MD → translate `[[Link]]` to `@[Link]`, strip image embeds, pass through
+  - Stores `raw_text` on Ingestion, updates status → `EXTRACTING`
+- Celery task: `process_document(ingestion_id)`
+  - Saves file to media
+  - Calls document extraction service
+  - Chains to shared extraction task
+  - Retry: 1x (local I/O, unlikely to fail)
 
-**Task 2.3 — Document extraction service**
-- New file: `apps/network_graph/services/document.py`
-- PDF → `pdfplumber` → plain text
-- DOCX → `python-docx` → plain text
-- TXT/MD → read as-is (markdown already handled by existing import, but now routes through pipeline)
-- Strips formatting, returns clean text
+**Task 2.3 — Freeform note ingestion**
+- New endpoint: `POST /api/ingest/note/` — accepts JSON body `{"text": "...", "title": ""}`
+- Creates `Ingestion` record with `source_type=FREEFORM_NOTE`, `status=PENDING`
+- Dispatches `process_freeform_note` Celery task
+- Returns `{ingestion_id, status}` immediately
+- New service: `apps/network_graph/services/ingest_freeform.py`
+  - Translates `[[Link]]` to `@[Link]` syntax
+  - Passes text through as-is (no extraction needed)
+  - Stores `raw_text` on Ingestion, updates status → `EXTRACTING`
+- Celery task: `process_freeform_note(ingestion_id)`
+  - No file to save — text comes from request body
+  - Calls freeform service (lightweight transform)
+  - Chains to shared extraction task
+  - No retry needed (no I/O)
 
-**Task 2.4 — Ingestion Celery task (with retry logic)**
-- In `tasks.py`: `process_ingestion(ingestion_id)`
-- Routes to transcription or document extraction based on `source_type`
-- Stores `raw_text` on Ingestion
-- Updates status → `EXTRACTING`
-- Chains to extraction task
-- Retry policy:
-  - Step 1 (transcription): retry 3x, exponential backoff (network call)
-  - Each step saves output to Ingestion record BEFORE chaining to next step
-  - If any step fails, earlier outputs are preserved
+**Task 2.4 — Tests for ingestion**
+- `tests/test_ingest_voice.py`: transcription service mock, audio file handling
+- `tests/test_ingest_document.py`: PDF/DOCX/TXT/MD extraction
+- `tests/test_ingest_freeform.py`: text passthrough, `[[Link]]` translation
 
 ---
 
 ### Phase 3: Entity Extraction (Step 2)
 
-> Depends on: Phase 2 (raw_text available)
+> Depends on: Phase 2 (raw_text available from any source)
+>
+> **Shared step** — all three ingestion paths converge here. Same Celery task regardless of source type.
 
-**Task 3.1 — LLM extraction service (people + relationships only)**
+**Task 3.1 — LLM extraction service (people, companies, relationships)**
 - New file: `apps/network_graph/services/extraction.py`
 - Single LLM call with strict JSON schema
-- MVP extraction schema (slimmed down — no companies, topics, commitments, action items as separate entities):
+- MVP extraction schema:
 
 ```json
 {
   "people": [
     {"name": "", "email": null, "company": null, "title": null}
+  ],
+  "companies": [
+    {"name": "", "website": null, "industry": null}
   ],
   "relationships": [
     {"from": "", "to": "", "label": ""}
@@ -243,13 +286,16 @@ Edge types:
 }
 ```
 
-- Company and title stay as **properties on PERSON nodes** (not separate nodes)
+- People carry company and title as identifiers — these also inform COMPANY node creation
+- Companies extracted as first-class entities → become COMPANY nodes
+- Relationships capture edges between any entity types (KNOWS, WORKS_AT, ATTENDED, DISCUSSED)
 - `meeting_context` feeds directly into the MEETING node and its summary
 - Uses `response_format` / tool-use for guaranteed JSON
 - Stores result in `Ingestion.extracted_json`
 - Retry: 2x on malformed JSON
 
 **Task 3.2 — Extraction Celery task**
+- `extract_entities(ingestion_id)` — shared task called by all three ingestion paths
 - Calls extraction service
 - Stores JSON result
 - Updates status → `RESOLVING`
@@ -258,7 +304,7 @@ Edge types:
 **Task 3.3 — Tests for extraction**
 - Mock LLM responses
 - Validate schema conformance
-- Edge cases: no entities found, malformed text
+- Edge cases: no entities found, malformed text, company mentioned without people
 
 ---
 
@@ -268,20 +314,28 @@ Edge types:
 
 **Task 4.1 — Resolution service (revised cascade, no name auto-link)**
 - New file: `apps/network_graph/services/resolution.py`
-- Revised resolution cascade:
+- Resolves both PERSON and COMPANY entities:
 
+**PERSON resolution cascade:**
 ```
 1. Email exact match              → auto-link (confidence 1.0)
 2. Phone exact match              → auto-link (confidence 0.95)
 3. Name exact + same company prop → queue for confirmation (confidence 0.7)
 4. Name exact, no company context → queue for confirmation (confidence 0.5)
-5. No match                       → create ghost node via DSL
-
-Rule: only confidence >= 0.9 auto-links. Everything else goes to the queue.
+5. No match                       → create ghost PERSON node via DSL
 ```
 
+**COMPANY resolution cascade:**
+```
+1. Name exact match (case-insensitive) → auto-link (confidence 1.0)
+2. Website exact match                  → auto-link (confidence 0.95)
+3. No match                             → create COMPANY node via DSL (not ghost — companies are lower risk to auto-create)
+```
+
+- Rule: only confidence >= 0.9 auto-links for PERSON. Everything else goes to the queue.
+- Companies auto-create more aggressively (exact name match is sufficient) since merging companies is lower risk than merging people.
 - Returns resolved entity list with node IDs and confidence scores
-- **Never auto-merges on name similarity alone**
+- **Never auto-merges people on name similarity alone**
 - Retry: 1x (local logic, unlikely to fail)
 
 **Task 4.2 — Resolution Queue API**
@@ -291,7 +345,8 @@ Rule: only confidence >= 0.9 auto-links. Everything else goes to the queue.
 - When resolved: ghost node either merges into confirmed node or gets promoted
 
 **Task 4.3 — Resolution Celery task**
-- Runs resolution for all entities in extraction JSON
+- `resolve_entities(ingestion_id)` — shared task
+- Runs resolution for all people and companies in extraction JSON
 - Updates status → `WRITING`
 - Chains to graph writing task
 
@@ -299,7 +354,8 @@ Rule: only confidence >= 0.9 auto-links. Everything else goes to the queue.
 - Email exact match → auto-link
 - Name-only → queue (never auto-link)
 - Name + same company → queue with 0.7 confidence
-- Ghost node creation
+- Company exact name → auto-link
+- Ghost node creation (PERSON only — companies create real nodes)
 - Duplicate prevention
 
 ---
@@ -312,21 +368,26 @@ Rule: only confidence >= 0.9 auto-links. Everything else goes to the queue.
 - New file: `apps/network_graph/services/graph_writer.py`
 - Takes resolved entity list + extracted relationships
 - Translates into DSL commands:
-  - `CREATE_NODE` for new entities
-  - `CONNECT` for relationships (ATTENDED edges for meeting participants, KNOWS edges between people)
-  - `UPDATE_PROFILE` for existing nodes with new properties (Title, Company, Last Interaction, Interaction Count)
+  - `CREATE_NODE` for new PERSON, COMPANY, and MEETING entities
+  - `CONNECT` for relationships:
+    - `ATTENDED` — person → meeting
+    - `KNOWS` — person ↔ person (with context label)
+    - `WORKS_AT` — person → company (from extracted company property)
+    - `DISCUSSED` — meeting → company (when company is mentioned in context)
+  - `UPDATE_PROFILE` for existing nodes with new properties (Title, Last Interaction, Interaction Count)
   - `FLAG_FOR_REVIEW` for low-confidence matches
 - Logs all commands to `Ingestion.dsl_commands`
 - Retry: 1x (local DB)
 
 **Task 5.2 — Graph writing Celery task**
+- `write_graph(ingestion_id)` — shared task
 - Executes DSL commands
 - Updates status → `SUMMARIZING`
 - Chains to summarization task
 
 **Task 5.3 — Tests for graph writer**
-- Correct node creation via DSL
-- Correct edge creation (ATTENDED + KNOWS)
+- Correct node creation via DSL (PERSON, COMPANY, MEETING)
+- Correct edge creation (ATTENDED, KNOWS, WORKS_AT, DISCUSSED)
 - Idempotency (re-running doesn't duplicate)
 
 ---
@@ -374,15 +435,40 @@ Rule: only confidence >= 0.9 auto-links. Everything else goes to the queue.
 - **Max length cap** (500 words) to prevent profiles from bloating after 30+ interactions. LLM must compress, not append forever.
 - Stored in `Node.summary` as structured JSON
 
+**Task 6.1c — Per-company health summary**
+- Aggregates all employee interaction summaries for a given COMPANY node
+- LLM receives: all PERSON summaries linked via WORKS_AT + all MEETING summaries involving those people
+- Output structure:
+
+```json
+{
+  "company_name": "Acme Corp",
+  "relationship_health": "strong",
+  "total_contacts": 3,
+  "last_interaction": "2025-03-01",
+  "key_context": [
+    "Raising Series A",
+    "3 contacts across engineering and leadership"
+  ],
+  "open_follow_ups": ["Intro Sarah to James at Sequoia"]
+}
+```
+
+- **Max length cap** (300 words) — company summaries should be scannable at a glance
+- Only regenerated when a linked PERSON's summary changes (not on every ingestion)
+- Stored in COMPANY `Node.summary` as structured JSON
+
 **Task 6.2 — Summarization Celery task**
-- Runs per-meeting and per-person summaries
+- `summarize(ingestion_id)` — shared task
+- Runs per-meeting, then per-person, then per-company summaries (in order — each depends on the previous)
 - Updates status → `COMPLETE`, sets `completed_at`
 - Retry: 2x (LLM call)
 
 **Task 6.3 — Tests for summarization**
-- Mock LLM, verify summary format matches schema
-- Cumulative profile updates don't lose data
-- Max length cap is respected
+- Mock LLM, verify summary format matches schema for all three types
+- Cumulative person profile updates don't lose data
+- Company summary aggregates correctly from linked people
+- Max length caps are respected
 
 ---
 
@@ -396,8 +482,11 @@ Rule: only confidence >= 0.9 auto-links. Everything else goes to the queue.
 - Failed ingestions show which step failed + retry button
 - New endpoint: `POST /api/ingestions/<id>/retry/` — retries from last failed step
 
-**Task 7.4 — Frontend integration**
-- Add ingestion upload zone to `templates/network_graph/index.html` (drag-drop area or button)
+**Task 7.2 — Frontend integration**
+- Add three ingestion upload zones to `templates/network_graph/index.html`:
+  - Voice note recorder/upload button → calls `POST /api/ingest/voice/`
+  - Document drop zone → calls `POST /api/ingest/document/`
+  - Freeform note text area → calls `POST /api/ingest/note/`
 - Add review card panel (slide-in after ingestion completes)
 - Add resolution queue modal (list of pending candidates with confirm/reject)
 
@@ -413,15 +502,16 @@ Rule: only confidence >= 0.9 auto-links. Everything else goes to the queue.
 | `.env` | Local dev config (gitignored) |
 | `config/celery.py` | Celery app configuration |
 | `apps/network_graph/dsl.py` | Graph mutation DSL layer (5 commands incl. merge_nodes) |
-| `apps/network_graph/schema.py` | Graph schema contract for PERSON + MEETING nodes |
+| `apps/network_graph/schema.py` | Graph schema contract for PERSON, COMPANY, MEETING nodes |
 | `apps/network_graph/tasks.py` | All Celery task definitions with retry policies |
 | `apps/network_graph/services/__init__.py` | Services package |
-| `apps/network_graph/services/transcription.py` | Audio → text |
-| `apps/network_graph/services/document.py` | PDF/DOCX → text |
-| `apps/network_graph/services/extraction.py` | LLM entity extraction (people + relationships only) |
-| `apps/network_graph/services/resolution.py` | Entity resolution with revised cascade |
+| `apps/network_graph/services/ingest_voice.py` | Voice note transcription (audio → text) |
+| `apps/network_graph/services/ingest_document.py` | Document extraction (PDF/DOCX/TXT/MD → text) |
+| `apps/network_graph/services/ingest_freeform.py` | Freeform note passthrough (text → text) |
+| `apps/network_graph/services/extraction.py` | LLM entity extraction (people, companies, relationships) |
+| `apps/network_graph/services/resolution.py` | Entity resolution with separate PERSON/COMPANY cascades |
 | `apps/network_graph/services/graph_writer.py` | DSL command execution |
-| `apps/network_graph/services/summarization.py` | Per-meeting + per-person summaries |
+| `apps/network_graph/services/summarization.py` | Per-meeting, per-person, per-company summaries |
 | `apps/network_graph/services/contacts_import.py` | CSV contacts import (seed data) |
 | `apps/network_graph/prompts/` | LLM prompt templates directory |
 | `tests/__init__.py` | Test package |
@@ -429,6 +519,9 @@ Rule: only confidence >= 0.9 auto-links. Everything else goes to the queue.
 | `tests/factories.py` | Factory Boy factories for Node, Connection, Ingestion |
 | `tests/test_dsl.py` | DSL unit tests (incl. merge_nodes) |
 | `tests/test_parser.py` | Parser regression tests |
+| `tests/test_ingest_voice.py` | Voice note ingestion tests |
+| `tests/test_ingest_document.py` | Document ingestion tests |
+| `tests/test_ingest_freeform.py` | Freeform note ingestion tests |
 | `tests/test_extraction.py` | Extraction service tests |
 | `tests/test_resolution.py` | Resolution service tests |
 | `tests/test_graph_writer.py` | Graph writer tests |
@@ -441,14 +534,14 @@ Rule: only confidence >= 0.9 auto-links. Everything else goes to the queue.
 |---|---|
 | `config/settings.py` | Add `django-environ` loading, Celery settings (`CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`), `LLM_PROVIDER`, `LLM_API_KEY`, `TRANSCRIPTION_API_URL` env vars, PostgreSQL as default |
 | `config/__init__.py` | Import celery app for autodiscovery |
-| `apps/network_graph/models.py` | Add `summary` JSONField to Node. Add `Ingestion` model. Add `ResolutionCandidate` model. |
+| `apps/network_graph/models.py` | Add `summary` JSONField to Node. Add `Ingestion` model (with `failed_step`). Add `ResolutionCandidate` model. |
 | `apps/network_graph/parser.py` | Replace direct ORM calls in `sync_connections()` with `dsl.create_node()` and `dsl.connect()`. Keep parsing logic untouched. |
-| `apps/network_graph/views.py` | Add `api_ingest()` endpoint. Add resolution queue endpoints. Add ingestion review + retry endpoints. Add contacts import endpoint. Refactor `api_import_nodes` to optionally route through pipeline. |
-| `apps/network_graph/urls.py` | Add URL patterns for new endpoints |
+| `apps/network_graph/views.py` | Add three ingestion endpoints (`api_ingest_voice`, `api_ingest_document`, `api_ingest_note`). Add resolution queue endpoints. Add ingestion review + retry endpoints. Add contacts import endpoint. Refactor `api_import_nodes` to optionally route through pipeline. |
+| `apps/network_graph/urls.py` | Add URL patterns for all new endpoints |
 | `apps/network_graph/admin.py` | Register `Ingestion`, `ResolutionCandidate` |
 | `pyproject.toml` | Add `celery[redis]`, `redis`, `anthropic` (or `openai`), `python-docx`, `pdfplumber`, `django-environ` |
-| `templates/network_graph/index.html` | Add upload zone, review card, resolution queue modal |
-| `static/js/graph.js` | Add ingestion upload handler, review card rendering, resolution queue UI |
+| `templates/network_graph/index.html` | Add three upload zones (voice, document, freeform), review card, resolution queue modal |
+| `static/js/graph.js` | Add three ingestion handlers, review card rendering, resolution queue UI |
 | `.gitignore` | Ensure `.env` is listed |
 
 ---
@@ -472,7 +565,7 @@ Rule: only confidence >= 0.9 auto-links. Everything else goes to the queue.
 |---|---|---|
 | PostgreSQL | Primary database | Required — SQLite + Celery = lock errors |
 | Redis | Celery broker | Local install or Docker container for dev |
-| Anthropic API (or OpenAI) | Entity extraction + summarization | Needs API key. ~2 LLM calls per ingestion. |
+| Anthropic API (or OpenAI) | Entity extraction + summarization | Needs API key. ~3 LLM calls per ingestion (extraction + meeting summary + person profiles). |
 | Existing TTS API | Voice transcription | Endpoint details needed |
 
 ### Environment Variables
@@ -535,11 +628,58 @@ TRANSCRIPTION_API_KEY=
 | DSL as serializable command log | The DSL logs all commands to `Ingestion.dsl_commands` for replay/audit. Slightly more complex than plain function wrappers, but enables undo and debugging. Right call. |
 | LLM provider choice | Switching between Anthropic and OpenAI later is doable (same interface pattern) but prompt engineering differs. Pick one now, make it swappable via interface. |
 | Summary as structured JSON field | `Node.summary` is a dedicated JSONField, separate from user-written `notes`. Cleaner for programmatic updates but means frontend must display both. |
-| Resolution cascade: name match never auto-links | Prevents wrong-person merges but means more items in the resolution queue. Correct tradeoff for a CRM — wrong merges destroy trust. |
+| Resolution cascade: name match never auto-links (people) | Prevents wrong-person merges but means more items in the resolution queue. Correct tradeoff for a CRM — wrong merges destroy trust. |
+| COMPANY as first-class node (not just a string property) | More complex graph but enables per-company summaries, WORKS_AT edges, and "show me everyone at Acme" queries. Worth the cost. |
+| Three separate ingestion paths | More code than a single endpoint, but each source type has genuinely different I/O (audio file vs. document file vs. JSON text). Separate services are independently testable and replaceable. |
 
 ---
 
-## 6. Priority Order
+## 6. Pipeline Architecture
+
+```
+                    ┌─────────────────┐
+                    │   VOICE NOTE    │
+                    │ POST /ingest/   │
+                    │     voice/      │
+                    └────────┬────────┘
+                             │ process_voice_note
+                             │ (transcribe audio)
+                             │
+                    ┌────────┴────────┐
+                    │   DOCUMENT      │
+                    │ POST /ingest/   │──────────┐
+                    │    document/    │           │
+                    └────────┬────────┘           │
+                             │ process_document   │
+                             │ (extract text)     │
+                             │                    │
+                    ┌────────┴────────┐           │
+                    │  FREEFORM NOTE  │           │
+                    │ POST /ingest/   │           │
+                    │      note/      │           │
+                    └────────┬────────┘           │
+                             │ process_freeform   │
+                             │ (passthrough)      │
+                             │                    │
+                    ┌────────▼────────────────────▼─┐
+                    │     SHARED PIPELINE            │
+                    │                                │
+                    │  extract_entities (LLM)        │
+                    │         │                      │
+                    │  resolve_entities               │
+                    │         │                      │
+                    │  write_graph (DSL)              │
+                    │         │                      │
+                    │  summarize (LLM)               │
+                    │    ├─ per-meeting               │
+                    │    ├─ per-person                │
+                    │    └─ per-company               │
+                    └────────────────────────────────┘
+```
+
+---
+
+## 7. Priority Order
 
 If building solo and need to ship something testable fast:
 
@@ -548,11 +688,11 @@ If building solo and need to ship something testable fast:
 | 1 | 0.0 | **PostgreSQL** — Celery + SQLite = database-locked errors |
 | 2 | 0.1–0.6 + 0.8 | **Foundation** — Models, Celery, schema. Nothing runs without this |
 | 3 | 1 | **DSL layer** — Everything writes through this. Get it right early |
-| 4 | 2 | **Ingestion** — Now you can accept input |
+| 4 | 2 | **Ingestion** — Three separate paths. Build freeform first (simplest), then document, then voice |
 | 5 | 3 | **Extraction** — Now input produces structured data |
-| 6 | 4 | **Resolution** — Now extracted people link to your graph |
+| 6 | 4 | **Resolution** — Now extracted people + companies link to your graph |
 | 7 | 5 | **Graph writing** — Now the graph actually updates |
-| 8 | 6 | **Summarization** — Now the data is useful |
+| 8 | 6 | **Summarization** — Now the data is useful. Per-meeting first, per-person second, per-company third |
 | 9 | 0.7 | **Seed import** — Do this whenever you want to test with real data |
 | 10 | 7 | **Frontend** — Do this last because you can test everything via API first |
 
@@ -560,8 +700,7 @@ If building solo and need to ship something testable fast:
 
 ## Deferred (Post-MVP Backlog)
 
-- COMPANY, TOPIC, COMMITMENT, ACTION_ITEM node types
-- Per-company summaries
+- TOPIC, COMMITMENT, ACTION_ITEM node types
 - Commitment scheduling + ScheduledReminder model
 - Resolution Queue polling/badges
 - Pre-meeting briefs (requires calendar sync)
