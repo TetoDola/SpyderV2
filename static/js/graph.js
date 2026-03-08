@@ -287,8 +287,8 @@ toggleGraphBtn.addEventListener("click", () => switchView("graph"));
 toggleTableBtn.addEventListener("click", () => switchView("table"));
 
 // ── force-graph rendering ──────────────────────────────
-const NODE_MIN_RADIUS = 3;
-const NODE_SCALE_FACTOR = 2;
+const NODE_MIN_RADIUS = 1.5;
+const NODE_SCALE_FACTOR = 0.5;
 const GHOST_COLOR = "#666666";
 const LIVE_COLOR = "#999999";
 const LABEL_FONT_SIZE = 3.5; // base font size in px
@@ -443,24 +443,30 @@ async function loadGraph() {
     .d3AlphaDecay(0.015)
     .d3VelocityDecay(0.3)
     .d3AlphaMin(0.005)
-    .warmupTicks(100)
-    .cooldownTicks(100)
+    .warmupTicks(200)
+    .cooldownTicks(200)
     .onNodeClick((node) => openPeek(node.id))
     .onNodeHover((node) => {
       hoveredNode = node || null;
       buildFocusSets(node, graph.graphData());
       canvas.style.cursor = node ? "pointer" : "default";
     })
+    .onNodeDrag((node) => {
+      // Reheat simulation so connected nodes react to the drag
+      graph.d3ReheatSimulation();
+    })
     .onNodeDragEnd((node) => {
       node.fx = undefined;
       node.fy = undefined;
     });
 
-  // ── D3 force tuning: tighter clusters, more separation between groups ──
-  graph.d3Force("charge").strength(-300).distanceMax(500);
-  graph.d3Force("link").distance(80).strength(0.6);
-  graph.d3Force("center", d3.forceCenter().strength(0.01));
-  graph.d3Force("collide", d3.forceCollide((node) => (node._radius || NODE_MIN_RADIUS) + 4).strength(0.8).iterations(3));
+  // ── D3 force tuning: Obsidian-style — pull everything into one mass ──
+  graph.d3Force("charge").strength(-50).distanceMax(200);
+  graph.d3Force("link").distance(30).strength(0.8);
+  graph.d3Force("center", null); // remove default center force
+  graph.d3Force("gravity-x", d3.forceX().strength(0.15));
+  graph.d3Force("gravity-y", d3.forceY().strength(0.15));
+  graph.d3Force("collide", d3.forceCollide((node) => (node._radius || NODE_MIN_RADIUS) + 2).strength(0.5).iterations(2));
 
   window.addEventListener("resize", () => {
     if (graph && currentView === "graph") {
