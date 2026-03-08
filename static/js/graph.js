@@ -291,8 +291,11 @@ const NODE_MIN_RADIUS = 1.5;
 const NODE_SCALE_FACTOR = 0.5;
 const GHOST_COLOR = "#666666";
 const LIVE_COLOR = "#999999";
-const LABEL_FONT_SIZE = 3.5; // base font size in px
-const LABEL_ZOOM_THRESHOLD = 0.4; // hide labels when zoomed out past this
+const LABEL_FONT_SIZE = 3; // base font size in px (smaller for readability)
+const LABEL_COLOR = "#AAAAAA"; // soft grey default
+const LABEL_COLOR_GHOST = "#555555";
+const LABEL_COLOR_HOVER = "#FFFFFF"; // bright white on hover
+const TEXT_THRESHOLD = 2.0; // zoom level: below = only high-degree labels
 const LABEL_ALWAYS_SHOW_DEGREE = 5; // always show labels for nodes with this many+ connections
 const BG_COLOR = "#191919";
 
@@ -373,19 +376,97 @@ async function loadGraph() {
     return;
   }
 
+  // ── Label culling: bounding-box overlap detection ──
+  // Each frame, we collect rendered label boxes and skip labels that would overlap.
+  let _labelBoxes = [];
+  let _lastFrameTime = 0; // used to detect new render frames
+
+  /**
+   * Predict the bounding box for a node's label.
+   * Returns { x, y, w, h, degree } or null if no label.
+   */
+  function predictLabelBox(node, ctx, fontSize) {
+    if (!node.label) return null;
+    const r = node._radius || NODE_MIN_RADIUS;
+    const textWidth = ctx.measureText(node.label).width;
+    const textHeight = fontSize * 1.2;
+    return {
+      x: node.x - textWidth / 2,
+      y: node.y + r + 2,
+      w: textWidth,
+      h: textHeight,
+      degree: node.degree || 0,
+    };
+  }
+
+  /** Check if two rectangles overlap */
+  function boxesOverlap(a, b) {
+    return !(a.x + a.w < b.x || b.x + b.w < a.x || a.y + a.h < b.y || b.y + b.h < a.y);
+  }
+
+  /** Check if a label box overlaps any nearby node circle */
+  function overlapsNodeCircle(box, allNodes, selfId) {
+    for (const n of allNodes) {
+      if (n.id === selfId) continue;
+      const r = n._radius || NODE_MIN_RADIUS;
+      // Approximate circle as a bounding square for fast check
+      const cx = n.x - r;
+      const cy = n.y - r;
+      const cs = r * 2;
+      if (!(box.x + box.w < cx || cx + cs < box.x || box.y + box.h < cy || cy + cs < box.y)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Try to register a label box. Returns true if the label can be drawn
+   * (no overlap with existing labels or nearby node circles).
+   */
+  function tryRegisterLabel(box, allNodes, selfId) {
+    // Check overlap with node circles
+    if (overlapsNodeCircle(box, allNodes, selfId)) return false;
+    // Check overlap with already-registered labels
+    for (const existing of _labelBoxes) {
+      if (boxesOverlap(box, existing)) {
+        // Collision: lower-degree node loses
+        if (box.degree < existing.degree) return false;
+      }
+    }
+    // Remove any lower-degree boxes this one would replace
+    _labelBoxes = _labelBoxes.filter(
+      (existing) => !(boxesOverlap(box, existing) && existing.degree < box.degree)
+    );
+    _labelBoxes.push(box);
+    return true;
+  }
+
   graph = ForceGraph()(canvas)
     .graphData({ nodes, links })
     .backgroundColor(BG_COLOR)
     .width(window.innerWidth)
     .height(window.innerHeight)
     .nodeRelSize(NODE_MIN_RADIUS)
+    .nodeCanvasObjectMode((node) => {
+      // Use "replace" so we control all drawing (circle + label)
+      return "replace";
+    })
     .nodeCanvasObject((node, ctx, globalScale) => {
+      // Reset label boxes at the start of each new render frame
+      const now = performance.now();
+      if (now - _lastFrameTime > 1) {
+        _labelBoxes = [];
+        _lastFrameTime = now;
+      }
+
       const r = node._radius || NODE_MIN_RADIUS;
       const isFocusMode = hoveredNode !== null;
       const isHighlighted = !isFocusMode || focusedNeighbors.has(node.id);
+      const isHovered = hoveredNode && hoveredNode.id === node.id;
       const alpha = isFocusMode ? (isHighlighted ? 1.0 : 0.08) : 1.0;
 
-      // Node dot
+      // ── Draw node circle ──
       const baseColor = node.is_ghost ? GHOST_COLOR : LIVE_COLOR;
       ctx.beginPath();
       ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
@@ -393,17 +474,48 @@ async function loadGraph() {
       ctx.globalAlpha = alpha;
       ctx.fill();
 
-      // Label — show when zoomed in enough, or always for high-degree nodes
-      const showLabel = globalScale >= LABEL_ZOOM_THRESHOLD ||
-        (node.degree >= LABEL_ALWAYS_SHOW_DEGREE && globalScale >= 0.2);
-      if (showLabel) {
+      // ── Determine if this node's label should render ──
+      const isOrphan = (node.degree || 0) === 0;
+      const isHighDegree = (node.degree || 0) >= LABEL_ALWAYS_SHOW_DEGREE;
+      const zoomedIn = globalScale >= TEXT_THRESHOLD;
+
+      // Rule: hovered node ALWAYS shows its label (drawn last, below)
+      // Rule: orphan labels hidden unless hovered
+      // Rule: when zoomed out, only high-degree nodes show labels
+      let shouldAttemptLabel = false;
+      if (isHovered) {
+        shouldAttemptLabel = true;
+      } else if (isOrphan) {
+        shouldAttemptLabel = false;
+      } else if (zoomedIn) {
+        shouldAttemptLabel = true; // zoomed in: show all (subject to culling)
+      } else if (isHighDegree) {
+        shouldAttemptLabel = true; // zoomed out but high-degree
+      }
+
+      if (shouldAttemptLabel && node.label) {
         const fontSize = LABEL_FONT_SIZE + (node.degree > 3 ? 0.5 : 0);
         ctx.font = `${fontSize}px Inter, system-ui, sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "top";
-        ctx.fillStyle = node.is_ghost ? "#555555" : "#909090";
-        ctx.globalAlpha = alpha * (isFocusMode && isHighlighted ? 1.0 : 0.8);
-        ctx.fillText(node.label, node.x, node.y + r + 2);
+
+        if (isHovered) {
+          // Hover: always draw on top, bright white, full opacity
+          ctx.textAlign = "center";
+          ctx.textBaseline = "top";
+          ctx.fillStyle = LABEL_COLOR_HOVER;
+          ctx.globalAlpha = 1.0;
+          ctx.fillText(node.label, node.x, node.y + r + 2);
+        } else {
+          // Attempt bounding-box culling
+          const box = predictLabelBox(node, ctx, fontSize);
+          const allNodes = graph.graphData().nodes;
+          if (box && tryRegisterLabel(box, allNodes, node.id)) {
+            ctx.textAlign = "center";
+            ctx.textBaseline = "top";
+            ctx.fillStyle = node.is_ghost ? LABEL_COLOR_GHOST : LABEL_COLOR;
+            ctx.globalAlpha = alpha * (isFocusMode && isHighlighted ? 1.0 : 0.8);
+            ctx.fillText(node.label, node.x, node.y + r + 2);
+          }
+        }
       }
 
       ctx.globalAlpha = 1.0;
@@ -466,7 +578,12 @@ async function loadGraph() {
   graph.d3Force("center", null); // remove default center force
   graph.d3Force("gravity-x", d3.forceX().strength(0.15));
   graph.d3Force("gravity-y", d3.forceY().strength(0.15));
-  graph.d3Force("collide", d3.forceCollide((node) => (node._radius || NODE_MIN_RADIUS) + 2).strength(0.5).iterations(2));
+  graph.d3Force("collide", d3.forceCollide((node) => {
+    // Gentle label-aware collision: just enough to prevent overlap, not spread apart
+    const r = node._radius || NODE_MIN_RADIUS;
+    const labelExtra = node.label ? node.label.length * 0.4 : 0;
+    return r + labelExtra + 1;
+  }).strength(0.3).iterations(2));
 
   window.addEventListener("resize", () => {
     if (graph && currentView === "graph") {
