@@ -116,6 +116,20 @@
       </svg>
     </button>
 
+    <!-- Notification bell -->
+    <button id="notif-bell"
+      class="relative p-2.5 bg-gray-800/80 backdrop-blur-md rounded-lg
+             text-white/35 hover:text-white/70 transition-colors duration-150
+             cursor-pointer border-none outline-none"
+      title="Notifications">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+        <path d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0"/>
+      </svg>
+      <span id="notif-badge"
+        class="hidden absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-blue-500 text-white text-[10px]
+               font-bold rounded-full flex items-center justify-center px-1">0</span>
+    </button>
+
     <!-- Settings gear -->
     <button id="settings-btn"
       class="p-2.5 bg-gray-800/80 backdrop-blur-md rounded-lg
@@ -129,20 +143,60 @@
     </button>
   </div>
 
-  <!-- Import toast -->
-  <div id="import-toast"
-    class="fixed bottom-8 left-8 z-[100] bg-gray-800/90 backdrop-blur-md text-white/70 text-sm
-           px-5 py-3 rounded-lg shadow-lg shadow-black/40 hidden transition-opacity duration-300">
-    <span id="import-toast-text">Importing...</span>
+  <!-- Toast container -->
+  <div id="toast-container"
+    class="fixed bottom-8 left-8 z-[1100] flex flex-col gap-2"></div>
+
+  <!-- ═══ Expandable FAB ═══ -->
+  <div id="fab-container" class="fixed bottom-8 right-8 z-[1000] flex flex-col-reverse items-center gap-3">
+    <!-- Main FAB button -->
+    <button id="fab-main"
+      class="fab-main w-14 h-14 rounded-full bg-white text-black text-2xl font-light
+             flex items-center justify-center shadow-lg shadow-white/10
+             hover:shadow-white/20 transition-all duration-200 cursor-pointer
+             leading-none border-none outline-none"
+      title="Add">
+      <svg id="fab-icon" class="w-6 h-6 transition-transform duration-200" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M12 4.5v15m7.5-7.5h-15"/>
+      </svg>
+    </button>
+
+    <!-- FAB options (hidden by default, animate in) -->
+    <div id="fab-options" class="flex flex-col items-center gap-2 fab-options-hidden">
+      <!-- Option 3: Add Notes (top) -->
+      <button class="fab-option" data-action="notes" title="Add Notes">
+        <span class="fab-option-btn">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+            <path d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10"/>
+          </svg>
+        </span>
+        <span class="fab-option-label">Add Notes</span>
+      </button>
+
+      <!-- Option 2: Log Meeting (middle) -->
+      <button class="fab-option" data-action="meeting" title="Log Meeting">
+        <span class="fab-option-btn">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+            <path d="M18 18.72a9.094 9.094 0 0 0 3.741-.479 3 3 0 0 0-4.682-2.72m.94 3.198.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0 1 12 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 0 1 6 18.719m12 0a5.971 5.971 0 0 0-.941-3.197m0 0A5.995 5.995 0 0 0 12 12.75a5.995 5.995 0 0 0-5.058 2.772m0 0a3 3 0 0 0-4.681 2.72 8.986 8.986 0 0 0 3.74.477m.94-3.197a5.971 5.971 0 0 0-.94 3.197M15 6.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm6 3a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Zm-13.5 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Z"/>
+          </svg>
+        </span>
+        <span class="fab-option-label">Log Meeting</span>
+      </button>
+
+      <!-- Option 1: Create Node (bottom, closest to main FAB) -->
+      <button class="fab-option" data-action="create" title="Create Node">
+        <span class="fab-option-btn">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+            <path d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z"/>
+          </svg>
+        </span>
+        <span class="fab-option-label">Create Node</span>
+      </button>
+    </div>
   </div>
 
-  <!-- FAB -->
-  <button id="fab-add"
-    class="fixed bottom-8 right-8 w-14 h-14 rounded-full bg-white text-black text-2xl font-light
-           flex items-center justify-center z-[100] shadow-lg shadow-white/10
-           hover:scale-110 hover:shadow-white/20 transition-all duration-150 cursor-pointer
-           leading-none border-none outline-none"
-    title="Add Node">+</button>
+  <!-- FAB click-away overlay (invisible, catches clicks outside FAB when expanded) -->
+  <div id="fab-overlay" class="fixed inset-0 z-[999] hidden"></div>
 
   <!-- ═══ Center Peek Modal (Detail + Create) ═══ -->
   <div id="peek-backdrop" class="fixed inset-0 bg-[#191919]/80 z-[300] hidden flex items-center justify-center">
@@ -215,11 +269,23 @@
                    transition-colors duration-150 outline-none">+ Add Property</button>
         </section>
 
-        <!-- Notes -->
+        <!-- Notes / Summary section -->
         <section class="flex-1 flex flex-col">
           <div class="flex items-center justify-between mb-3">
-            <h3 class="text-[11px] font-semibold text-white/30 uppercase tracking-widest">Notes</h3>
+            <!-- Main tab toggle: Notes vs Summary -->
             <div class="flex bg-white/[0.04] rounded-lg p-0.5">
+              <button type="button" id="peek-tab-notes"
+                class="peek-main-tab px-3 py-1 text-[11px] rounded-md transition-colors duration-150
+                       cursor-pointer border-none outline-none font-medium
+                       bg-white/10 text-white/70">Notes</button>
+              <button type="button" id="peek-tab-summary"
+                class="peek-main-tab px-3 py-1 text-[11px] rounded-md transition-colors duration-150
+                       cursor-pointer border-none outline-none font-medium
+                       bg-transparent text-white/30 hover:text-white/50">Summary</button>
+            </div>
+
+            <!-- Notes sub-tabs: Edit / Preview (only visible when Notes tab active) -->
+            <div id="notes-subtabs" class="flex bg-white/[0.04] rounded-lg p-0.5">
               <button type="button" id="notes-tab-edit"
                 class="notes-tab px-3 py-1 text-[11px] rounded-md transition-colors duration-150
                        cursor-pointer border-none outline-none font-medium
@@ -230,7 +296,9 @@
                        bg-transparent text-white/30 hover:text-white/50">Preview</button>
             </div>
           </div>
-          <div class="relative flex-1">
+
+          <!-- Notes content -->
+          <div id="peek-notes-section" class="relative flex-1">
             <textarea id="peek-notes"
               placeholder="Type @ to mention and link entities... Supports **Markdown**"
               class="w-full min-h-[200px] bg-transparent border-none focus:ring-0 p-0
@@ -241,6 +309,17 @@
             <div id="mention-dropdown"
               class="absolute left-0 z-50 w-64 bg-[#2a2a2a] border border-white/10 rounded-lg shadow-2xl
                      overflow-hidden hidden"></div>
+          </div>
+
+          <!-- Summary content (hidden by default) -->
+          <div id="peek-summary-section" class="hidden flex-1">
+            <div id="peek-summary-content" class="text-sm leading-relaxed text-gray-300 space-y-4">
+              <!-- Rendered dynamically by JS based on node type -->
+            </div>
+            <div id="peek-summary-empty" class="hidden text-center py-8">
+              <p class="text-white/20 text-sm mb-1">No AI summary yet.</p>
+              <p class="text-white/15 text-xs">Log a meeting or add notes mentioning<br>this person to generate a summary.</p>
+            </div>
           </div>
         </section>
       </div>
@@ -254,6 +333,258 @@
           class="px-6 py-2 bg-white text-black rounded-lg text-sm font-semibold
                  hover:bg-white/85 disabled:opacity-40 disabled:cursor-not-allowed
                  transition-opacity duration-150 cursor-pointer border-none outline-none">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Notification Panel (slide-out from right) ═══ -->
+  <div id="notif-overlay" class="fixed inset-0 bg-black/40 z-[500] hidden"></div>
+  <div id="notif-panel"
+    class="fixed top-0 right-0 w-[380px] h-full bg-[#1e1e1e] z-[510] shadow-2xl
+           transform translate-x-full transition-transform duration-200 ease-out
+           flex flex-col border-l border-white/[0.06]">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between px-5 py-4 border-b border-white/[0.06] shrink-0">
+      <h2 class="text-sm font-semibold text-white/70 uppercase tracking-widest">Notifications</h2>
+      <button id="notif-close"
+        class="p-2 text-white/25 hover:text-white/60 hover:bg-white/5 rounded-lg
+               transition-colors duration-150 cursor-pointer bg-transparent border-none outline-none">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M18 6L6 18M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Filter tabs -->
+    <div class="flex gap-1 px-5 py-3 border-b border-white/[0.06] shrink-0">
+      <button class="notif-filter-tab px-3 py-1 text-[11px] font-medium rounded-md
+                     cursor-pointer border-none outline-none transition-colors duration-150
+                     bg-white/10 text-white/70" data-filter="all">All</button>
+      <button class="notif-filter-tab px-3 py-1 text-[11px] font-medium rounded-md
+                     cursor-pointer border-none outline-none transition-colors duration-150
+                     bg-transparent text-white/30 hover:text-white/50" data-filter="active">Active</button>
+      <button class="notif-filter-tab px-3 py-1 text-[11px] font-medium rounded-md
+                     cursor-pointer border-none outline-none transition-colors duration-150
+                     bg-transparent text-white/30 hover:text-white/50" data-filter="done">Done</button>
+    </div>
+
+    <!-- Scrollable card list -->
+    <div id="notif-list" class="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+      <!-- Cards rendered dynamically by JS -->
+    </div>
+
+    <!-- Empty state -->
+    <div id="notif-empty" class="hidden flex-1 flex items-center justify-center">
+      <p class="text-white/20 text-sm">No notifications yet.</p>
+    </div>
+
+    <!-- Load more -->
+    <div id="notif-load-more" class="hidden px-4 py-3 border-t border-white/[0.06]">
+      <button id="notif-load-more-btn"
+        class="w-full py-2 text-[11px] text-white/30 hover:text-white/50 bg-transparent
+               border border-white/[0.06] rounded-lg cursor-pointer transition-colors duration-150
+               outline-none">Load more</button>
+    </div>
+  </div>
+
+  <!-- ═══ Meeting Logger Panel ═══ -->
+  <div id="meeting-backdrop" class="fixed inset-0 bg-[#191919]/80 z-[600] hidden flex items-center justify-center">
+    <div class="bg-[#1e1e1e] rounded-xl shadow-2xl w-full max-w-[480px] max-h-[90vh] flex flex-col overflow-hidden mx-4">
+
+      <!-- Header -->
+      <div class="flex items-center justify-between px-6 py-4 border-b border-white/[0.06] shrink-0">
+        <h2 class="text-sm font-semibold text-white/70">Log Meeting</h2>
+        <button id="meeting-close"
+          class="p-2 text-white/25 hover:text-white/60 hover:bg-white/5 rounded-lg
+                 transition-colors duration-150 cursor-pointer bg-transparent border-none outline-none">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Body -->
+      <div class="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+        <!-- Title -->
+        <div>
+          <label class="text-[11px] font-semibold text-white/30 uppercase tracking-widest block mb-1.5">Title (optional)</label>
+          <input id="meeting-title" type="text" placeholder='e.g. "Catch-up with Sarah"'
+            class="w-full bg-white/[0.03] border border-white/[0.06] rounded-lg px-3 py-2.5
+                   text-sm text-white placeholder-white/15 outline-none focus:border-white/15 transition-colors">
+        </div>
+
+        <!-- Date -->
+        <div>
+          <label class="text-[11px] font-semibold text-white/30 uppercase tracking-widest block mb-1.5">Date</label>
+          <input id="meeting-date" type="date"
+            class="w-full bg-white/[0.03] border border-white/[0.06] rounded-lg px-3 py-2.5
+                   text-sm text-white outline-none focus:border-white/15 transition-colors
+                   [color-scheme:dark]">
+        </div>
+
+        <!-- People (autocomplete multi-select) -->
+        <div>
+          <label class="text-[11px] font-semibold text-white/30 uppercase tracking-widest block mb-1.5">People *</label>
+          <div id="meeting-people-field"
+            class="w-full bg-white/[0.03] border border-white/[0.06] rounded-lg px-2 py-2
+                   flex flex-wrap gap-1.5 items-center min-h-[42px] focus-within:border-white/15 transition-colors relative">
+            <!-- Chips rendered here by JS -->
+            <input id="meeting-people-input" type="text" placeholder="Search or create person..."
+              class="flex-1 min-w-[120px] bg-transparent border-none outline-none text-sm text-white placeholder-white/15 px-1">
+            <!-- Autocomplete dropdown -->
+            <div id="meeting-people-dropdown"
+              class="absolute left-0 top-full mt-1 w-full bg-[#2a2a2a] border border-white/10 rounded-lg
+                     shadow-2xl overflow-hidden hidden z-50 max-h-[200px] overflow-y-auto"></div>
+          </div>
+          <p id="meeting-people-error" class="hidden text-red-400 text-[11px] mt-1">At least one person required</p>
+        </div>
+
+        <!-- Notes -->
+        <div>
+          <label class="text-[11px] font-semibold text-white/30 uppercase tracking-widest block mb-1.5">Notes</label>
+          <textarea id="meeting-notes" rows="5"
+            placeholder="Discussed Series A timeline..."
+            class="w-full bg-white/[0.03] border border-white/[0.06] rounded-lg px-3 py-2.5
+                   text-sm text-white placeholder-white/15 outline-none resize-none
+                   focus:border-white/15 transition-colors"></textarea>
+        </div>
+
+        <!-- File attachment -->
+        <div>
+          <label class="text-[11px] font-semibold text-white/30 uppercase tracking-widest block mb-1.5">Attach file (optional)</label>
+          <div id="meeting-dropzone"
+            class="w-full border border-dashed border-white/10 rounded-lg px-4 py-5
+                   text-center cursor-pointer hover:border-white/20 transition-colors duration-150">
+            <div id="meeting-dropzone-prompt">
+              <p class="text-white/25 text-sm mb-1">Drop audio or document here</p>
+              <p class="text-white/15 text-[11px]">.m4a .mp3 .wav .pdf .docx .txt</p>
+            </div>
+            <div id="meeting-dropzone-file" class="hidden flex items-center justify-center gap-2">
+              <span id="meeting-file-name" class="text-white/60 text-sm truncate"></span>
+              <span id="meeting-file-size" class="text-white/30 text-[11px]"></span>
+              <button id="meeting-file-remove" type="button"
+                class="text-white/30 hover:text-red-400 text-sm cursor-pointer bg-transparent border-none outline-none ml-2">x</button>
+            </div>
+            <input id="meeting-file-input" type="file" class="hidden"
+              accept=".m4a,.mp3,.wav,.ogg,.webm,.pdf,.docx,.txt,.md">
+          </div>
+        </div>
+
+        <!-- Auto-create toggle -->
+        <div class="flex items-center gap-3">
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input id="meeting-auto-create" type="checkbox" checked class="sr-only peer">
+            <div class="w-9 h-5 bg-white/10 peer-focus:outline-none rounded-full peer
+                        peer-checked:after:translate-x-full after:content-[''] after:absolute
+                        after:top-[2px] after:left-[2px] after:bg-white/50 after:rounded-full
+                        after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-500/60
+                        peer-checked:after:bg-white"></div>
+          </label>
+          <span class="text-[12px] text-white/40">Auto-create new people</span>
+        </div>
+
+        <!-- Inline error -->
+        <p id="meeting-error" class="hidden text-red-400 text-sm"></p>
+      </div>
+
+      <!-- Footer -->
+      <div class="flex justify-end px-6 py-4 border-t border-white/[0.06] shrink-0">
+        <button id="meeting-submit"
+          class="px-6 py-2.5 bg-white text-black rounded-lg text-sm font-semibold
+                 hover:bg-white/85 disabled:opacity-40 disabled:cursor-not-allowed
+                 transition-opacity duration-150 cursor-pointer border-none outline-none">Save & Process</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Add Notes Panel ═══ -->
+  <div id="addnotes-backdrop" class="fixed inset-0 bg-[#191919]/80 z-[600] hidden flex items-center justify-center">
+    <div class="bg-[#1e1e1e] rounded-xl shadow-2xl w-full max-w-[480px] max-h-[90vh] flex flex-col overflow-hidden mx-4">
+
+      <!-- Header -->
+      <div class="flex items-center justify-between px-6 py-4 border-b border-white/[0.06] shrink-0">
+        <h2 class="text-sm font-semibold text-white/70">Add Notes</h2>
+        <button id="addnotes-close"
+          class="p-2 text-white/25 hover:text-white/60 hover:bg-white/5 rounded-lg
+                 transition-colors duration-150 cursor-pointer bg-transparent border-none outline-none">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Body -->
+      <div class="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+        <!-- About (single person) -->
+        <div>
+          <label class="text-[11px] font-semibold text-white/30 uppercase tracking-widest block mb-1.5">About *</label>
+          <div id="addnotes-about-field"
+            class="w-full bg-white/[0.03] border border-white/[0.06] rounded-lg px-2 py-2
+                   flex flex-wrap gap-1.5 items-center min-h-[42px] focus-within:border-white/15 transition-colors relative">
+            <input id="addnotes-about-input" type="text" placeholder="Search or create person..."
+              class="flex-1 min-w-[120px] bg-transparent border-none outline-none text-sm text-white placeholder-white/15 px-1">
+            <div id="addnotes-about-dropdown"
+              class="absolute left-0 top-full mt-1 w-full bg-[#2a2a2a] border border-white/10 rounded-lg
+                     shadow-2xl overflow-hidden hidden z-50 max-h-[200px] overflow-y-auto"></div>
+          </div>
+          <p id="addnotes-about-error" class="hidden text-red-400 text-[11px] mt-1">Exactly one person required</p>
+        </div>
+
+        <!-- Notes -->
+        <div>
+          <label class="text-[11px] font-semibold text-white/30 uppercase tracking-widest block mb-1.5">Notes *</label>
+          <textarea id="addnotes-notes" rows="6"
+            placeholder="Sarah mentioned she's also advising a biotech startup..."
+            class="w-full bg-white/[0.03] border border-white/[0.06] rounded-lg px-3 py-2.5
+                   text-sm text-white placeholder-white/15 outline-none resize-none
+                   focus:border-white/15 transition-colors"></textarea>
+        </div>
+
+        <!-- File attachment -->
+        <div>
+          <label class="text-[11px] font-semibold text-white/30 uppercase tracking-widest block mb-1.5">Attach file (optional)</label>
+          <div id="addnotes-dropzone"
+            class="w-full border border-dashed border-white/10 rounded-lg px-4 py-5
+                   text-center cursor-pointer hover:border-white/20 transition-colors duration-150">
+            <div id="addnotes-dropzone-prompt">
+              <p class="text-white/25 text-sm mb-1">Drop audio or document here</p>
+              <p class="text-white/15 text-[11px]">.m4a .mp3 .wav .pdf .docx .txt</p>
+            </div>
+            <div id="addnotes-dropzone-file" class="hidden flex items-center justify-center gap-2">
+              <span id="addnotes-file-name" class="text-white/60 text-sm truncate"></span>
+              <span id="addnotes-file-size" class="text-white/30 text-[11px]"></span>
+              <button id="addnotes-file-remove" type="button"
+                class="text-white/30 hover:text-red-400 text-sm cursor-pointer bg-transparent border-none outline-none ml-2">x</button>
+            </div>
+            <input id="addnotes-file-input" type="file" class="hidden"
+              accept=".m4a,.mp3,.wav,.ogg,.webm,.pdf,.docx,.txt,.md">
+          </div>
+        </div>
+
+        <!-- Auto-create toggle -->
+        <div class="flex items-center gap-3">
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input id="addnotes-auto-create" type="checkbox" checked class="sr-only peer">
+            <div class="w-9 h-5 bg-white/10 peer-focus:outline-none rounded-full peer
+                        peer-checked:after:translate-x-full after:content-[''] after:absolute
+                        after:top-[2px] after:left-[2px] after:bg-white/50 after:rounded-full
+                        after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-500/60
+                        peer-checked:after:bg-white"></div>
+          </label>
+          <span class="text-[12px] text-white/40">Auto-create new people</span>
+        </div>
+
+        <!-- Inline error -->
+        <p id="addnotes-error" class="hidden text-red-400 text-sm"></p>
+      </div>
+
+      <!-- Footer -->
+      <div class="flex justify-end px-6 py-4 border-t border-white/[0.06] shrink-0">
+        <button id="addnotes-submit"
+          class="px-6 py-2.5 bg-white text-black rounded-lg text-sm font-semibold
+                 hover:bg-white/85 disabled:opacity-40 disabled:cursor-not-allowed
+                 transition-opacity duration-150 cursor-pointer border-none outline-none">Save & Process</button>
       </div>
     </div>
   </div>
@@ -320,5 +651,8 @@
   </div>
 
   <script src="{% static 'js/graph.js' %}"></script>
+  <script src="{% static 'js/fab.js' %}"></script>
+  <script src="{% static 'js/ingestion.js' %}"></script>
+  <script src="{% static 'js/notifications.js' %}"></script>
 </body>
 </html>

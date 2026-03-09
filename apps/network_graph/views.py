@@ -4,6 +4,7 @@ import re
 import frontmatter
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, render
+from django.utils.dateparse import parse_datetime
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods
 
@@ -18,6 +19,17 @@ from apps.network_graph.models import (
     ResolutionStatus,
 )
 from apps.network_graph.parser import process_auto_links
+
+# Active statuses for notification badge count
+ACTIVE_STATUSES = [
+    IngestionStatus.PENDING,
+    IngestionStatus.TRANSCRIBING,
+    IngestionStatus.EXTRACTING,
+    IngestionStatus.RESOLVING,
+    IngestionStatus.WRITING,
+    IngestionStatus.SUMMARIZING,
+    IngestionStatus.FAILED,
+]
 
 # Regex to translate Obsidian [[Link]] to @[Link] (bracket-delimited)
 # Negative lookbehind skips image embeds ![[image.jpg]]
@@ -202,15 +214,34 @@ def api_node_image(request: HttpRequest, node_id: str) -> JsonResponse:
 
 @require_GET
 def api_node_search(request: HttpRequest) -> JsonResponse:
-    """Search nodes by title prefix for @ autocomplete."""
-    q = request.GET.get("q", "").strip()
+    """Search nodes by title prefix for @ autocomplete.
 
+    Query params:
+        q: search string (title icontains)
+        node_type: filter by node type (e.g. PERSON)
+    """
+    q = request.GET.get("q", "").strip()
+    node_type = request.GET.get("node_type", "").strip()
+
+    qs = Node.objects.all()
     if q:
-        nodes = Node.objects.filter(title__icontains=q)[:10]
-    else:
-        nodes = Node.objects.all()[:10]
+        qs = qs.filter(title__icontains=q)
+    if node_type and node_type in ("PERSON", "COMPANY", "MEETING"):
+        qs = qs.filter(node_type=node_type)
+    nodes = qs[:10]
     return JsonResponse(
-        {"results": [{"id": str(n.id), "title": n.title, "node_type": n.node_type} for n in nodes]}
+        {
+            "results": [
+                {
+                    "id": str(n.id),
+                    "title": n.title,
+                    "node_type": n.node_type,
+                    "properties": n.properties,
+                    "is_ghost": n.is_ghost,
+                }
+                for n in nodes
+            ]
+        }
     )
 
 
@@ -448,19 +479,55 @@ def api_ingest_document(request: HttpRequest) -> JsonResponse:
 @csrf_exempt
 @require_http_methods(["POST"])
 def api_ingest_note(request: HttpRequest) -> JsonResponse:
-    """Ingest a freeform note. Accepts JSON body with text field."""
-    try:
-        data = json.loads(request.body)
-    except json.JSONDecodeError:
-        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    """Ingest notes about a specific person.
 
-    text = data.get("text", "").strip()
-    if not text:
-        return JsonResponse({"error": "text is required"}, status=400)
+    Accepts multipart form with:
+        about_node_id: UUID of existing person (mutually exclusive with about_name)
+        about_name: name string if creating new person
+        about_create_new: bool, true if about_name should create a new node
+        notes: text content (required if no file)
+        auto_create: bool, auto-create extracted entities
+        file: optional attachment
+    """
+    # Parse form data (multipart or JSON)
+    if request.content_type and "multipart" in request.content_type:
+        about_node_id = request.POST.get("about_node_id", "").strip()
+        about_name = request.POST.get("about_name", "").strip()
+        notes = request.POST.get("notes", "").strip()
+        auto_create = request.POST.get("auto_create", "true").lower() == "true"
+        file = request.FILES.get("file")
+    else:
+        try:
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+        about_node_id = str(data.get("about_node_id", "")).strip()
+        about_name = str(data.get("about_name", "")).strip()
+        notes = str(data.get("notes", "")).strip()
+        auto_create = bool(data.get("auto_create", True))
+        file = None
+
+    # Validation
+    if not about_node_id and not about_name:
+        return JsonResponse({"error": "about_node_id or about_name is required"}, status=400)
+    if not notes and not file:
+        return JsonResponse({"error": "Notes or a file attachment is required"}, status=400)
+
+    # Resolve the about person
+    if about_node_id:
+        about_node = Node.objects.filter(pk=about_node_id).first()
+        if not about_node:
+            return JsonResponse({"error": "Person not found"}, status=404)
+        title = f"Notes about {about_node.title}"
+    else:
+        title = f"Notes about {about_name}"
 
     ingestion = Ingestion.objects.create(
         source_type=IngestionSourceType.FREEFORM_NOTE,
-        raw_text=text,
+        title=title,
+        raw_text=notes,
+        auto_create=auto_create,
+        original_file=file,
         status=IngestionStatus.PENDING,
     )
 
@@ -469,8 +536,121 @@ def api_ingest_note(request: HttpRequest) -> JsonResponse:
     process_freeform_note.delay(str(ingestion.pk))
 
     return JsonResponse(
-        {"ingestion_id": str(ingestion.pk), "status": ingestion.status},
-        status=202,
+        {
+            "ingestion_id": str(ingestion.pk),
+            "status": ingestion.status,
+            "message": "Notes queued for processing.",
+        },
+        status=201,
+    )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def api_ingest_meeting(request: HttpRequest) -> JsonResponse:
+    """Log a meeting with linked people, notes, and optional file attachment.
+
+    Accepts multipart form with:
+        title: optional meeting title
+        date: date string (defaults to today)
+        linked_people: JSON array of {node_id} or {name, create_new: true}
+        notes: text content
+        auto_create: bool, auto-create extracted entities
+        file: optional audio/document attachment
+    """
+    title = request.POST.get("title", "").strip()
+    date = request.POST.get("date", "").strip()
+    linked_people_raw = request.POST.get("linked_people", "[]")
+    notes = request.POST.get("notes", "").strip()
+    auto_create = request.POST.get("auto_create", "true").lower() == "true"
+    file = request.FILES.get("file")
+
+    # Parse linked_people JSON
+    try:
+        linked_people = json.loads(linked_people_raw)
+        if not isinstance(linked_people, list):
+            return JsonResponse({"error": "linked_people must be an array"}, status=400)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid linked_people JSON"}, status=400)
+
+    # Validation
+    if not linked_people:
+        return JsonResponse({"error": "At least one person must be linked"}, status=400)
+
+    # Validate each linked person entry
+    for i, person in enumerate(linked_people):
+        if not isinstance(person, dict):
+            return JsonResponse(
+                {"error": f"linked_people[{i}] must be an object"},
+                status=400,
+            )
+        node_id = person.get("node_id")
+        name = person.get("name", "")
+        create_new = person.get("create_new", False)
+        if node_id:
+            if not Node.objects.filter(pk=node_id).exists():
+                return JsonResponse(
+                    {"error": f"Person with id {node_id} no longer exists. Please re-select."},
+                    status=400,
+                )
+        elif create_new and name:
+            continue  # Valid: creating a new person
+        else:
+            return JsonResponse(
+                {"error": f"linked_people[{i}] must have node_id or name with create_new"},
+                status=400,
+            )
+
+    if not notes and not file:
+        return JsonResponse({"error": "Notes or a file attachment is required"}, status=400)
+
+    # Validate file extension if provided
+    if file:
+        ext = "." + file.name.rsplit(".", 1)[-1].lower() if "." in file.name else ""
+        allowed = AUDIO_EXTENSIONS | DOCUMENT_EXTENSIONS
+        if ext not in allowed:
+            return JsonResponse(
+                {"error": f"Unsupported file format. Allowed: {', '.join(sorted(allowed))}"},
+                status=400,
+            )
+
+    # Build title
+    if not title:
+        names = []
+        for p in linked_people[:3]:
+            if p.get("node_id"):
+                node = Node.objects.filter(pk=p["node_id"]).first()
+                names.append(node.title if node else "Unknown")
+            elif p.get("name"):
+                names.append(p["name"])
+        title = f"Meeting with {', '.join(names)}"
+        if len(linked_people) > 3:
+            title += f" +{len(linked_people) - 3}"
+
+    ingestion = Ingestion.objects.create(
+        source_type=IngestionSourceType.MEETING,
+        title=title,
+        raw_text=notes,
+        auto_create=auto_create,
+        original_file=file,
+        extracted_json={
+            "linked_people": linked_people,
+            "meeting_date": date,
+        },
+        status=IngestionStatus.PENDING,
+    )
+
+    from apps.network_graph.tasks import process_freeform_note
+
+    process_freeform_note.delay(str(ingestion.pk))
+
+    return JsonResponse(
+        {
+            "ingestion_id": str(ingestion.pk),
+            "status": ingestion.status,
+            "message": "Meeting logged. Processing in background.",
+        },
+        status=201,
     )
 
 
@@ -498,36 +678,78 @@ def api_ingestion_status(request: HttpRequest, ingestion_id: str) -> JsonRespons
 
 @require_GET
 def api_ingestion_review(request: HttpRequest, ingestion_id: str) -> JsonResponse:
-    """Return a review card for a completed ingestion."""
+    """Return detailed review data for a completed ingestion.
+
+    Parses dsl_commands to extract nodes_created, nodes_updated,
+    and connections_created for the review card expansion.
+    """
     ingestion = get_object_or_404(Ingestion, pk=ingestion_id)
-    extracted = ingestion.extracted_json if isinstance(ingestion.extracted_json, dict) else {}
+    dsl_cmds = ingestion.dsl_commands if isinstance(ingestion.dsl_commands, list) else []
+
+    nodes_created: list[dict[str, object]] = []
+    nodes_updated: list[dict[str, object]] = []
+    connections_created: list[dict[str, str]] = []
+
+    for cmd in dsl_cmds:
+        if not isinstance(cmd, dict):
+            continue
+        action = cmd.get("action", "")
+        if action == "create_node":
+            node_id = cmd.get("node_id", "")
+            node = Node.objects.filter(pk=node_id).first() if node_id else None
+            nodes_created.append(
+                {
+                    "id": node_id,
+                    "name": node.title if node else cmd.get("title", "Unknown"),
+                    "type": cmd.get("node_type", "PERSON"),
+                    "is_ghost": node.is_ghost if node else False,
+                }
+            )
+        elif action == "update_profile":
+            node_id = cmd.get("node_id", "")
+            node = Node.objects.filter(pk=node_id).first() if node_id else None
+            updates = cmd.get("updates")
+            changes = list(updates.keys()) if isinstance(updates, dict) else []
+            nodes_updated.append(
+                {
+                    "id": node_id,
+                    "name": node.title if node else "Unknown",
+                    "type": node.node_type if node else "PERSON",
+                    "changes": changes,
+                }
+            )
+        elif action == "connect":
+            source_id = cmd.get("source_id", "")
+            target_id = cmd.get("target_id", "")
+            src = Node.objects.filter(pk=source_id).first() if source_id else None
+            tgt = Node.objects.filter(pk=target_id).first() if target_id else None
+            connections_created.append(
+                {
+                    "from": src.title if src else "Unknown",
+                    "to": tgt.title if tgt else "Unknown",
+                    "label": cmd.get("label", ""),
+                }
+            )
 
     pending_candidates = ResolutionCandidate.objects.filter(
         ingestion=ingestion,
         status=ResolutionStatus.PENDING,
-    )
+    ).select_related("candidate_node")
 
     return JsonResponse(
         {
             "ingestion_id": str(ingestion.pk),
             "source_type": ingestion.source_type,
             "status": ingestion.status,
-            "extracted": {
-                "people_count": len(extracted.get("people", [])),
-                "companies_count": len(extracted.get("companies", [])),
-                "relationships_count": len(extracted.get("relationships", [])),
+            "title": ingestion.title,
+            "created_at": ingestion.created_at.isoformat(),
+            "completed_at": ingestion.completed_at.isoformat() if ingestion.completed_at else None,
+            "results": {
+                "nodes_created": nodes_created,
+                "nodes_updated": nodes_updated,
+                "connections_created": connections_created,
             },
-            "dsl_commands_count": (
-                len(ingestion.dsl_commands) if isinstance(ingestion.dsl_commands, list) else 0
-            ),
-            "pending_resolutions": [
-                {
-                    "id": str(c.pk),
-                    "name": c.extracted_name,
-                    "confidence": c.confidence,
-                }
-                for c in pending_candidates
-            ],
+            "pending_resolutions": len(list(pending_candidates)),
         }
     )
 
@@ -671,3 +893,112 @@ def api_resolution_resolve(request: HttpRequest, candidate_id: str) -> JsonRespo
             "status": candidate.status,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Ingestion List & Dismiss
+# ---------------------------------------------------------------------------
+
+
+@require_GET
+def api_ingestions_list(request: HttpRequest) -> JsonResponse:
+    """List ingestions for the notification panel.
+
+    Query params:
+        status: 'active' | 'complete' | omit for all
+        updated_since: ISO datetime — only return items changed since
+        page: page number (default 1)
+        page_size: items per page (default 20)
+    """
+    status_filter = request.GET.get("status", "").strip()
+    updated_since = request.GET.get("updated_since", "").strip()
+    page = max(1, int(request.GET.get("page", "1")))
+    page_size = min(50, max(1, int(request.GET.get("page_size", "20"))))
+
+    qs = Ingestion.objects.all().order_by("-created_at")
+
+    if status_filter == "active":
+        qs = qs.filter(status__in=ACTIVE_STATUSES)
+    elif status_filter == "complete":
+        qs = qs.filter(status__in=[IngestionStatus.COMPLETE, IngestionStatus.DISMISSED])
+
+    if updated_since:
+        dt = parse_datetime(updated_since)
+        if dt:
+            from django.db.models import Q
+
+            qs = qs.filter(Q(created_at__gte=dt) | Q(completed_at__gte=dt))
+
+    total = qs.count()
+    offset = (page - 1) * page_size
+    ingestions = qs[offset : offset + page_size]
+
+    # Prefetch pending resolution candidates
+    items = []
+    for ing in ingestions:
+        pending = ResolutionCandidate.objects.filter(
+            ingestion=ing,
+            status=ResolutionStatus.PENDING,
+        ).select_related("candidate_node")
+
+        items.append(
+            {
+                "id": str(ing.pk),
+                "source_type": ing.source_type,
+                "status": ing.status,
+                "title": ing.title
+                or (f"{ing.get_source_type_display()} — {ing.created_at.strftime('%Y-%m-%d')}"),
+                "created_at": ing.created_at.isoformat(),
+                "completed_at": ing.completed_at.isoformat() if ing.completed_at else None,
+                "failed_step": ing.failed_step,
+                "error_message": ing.error_message,
+                "pending_resolutions": [
+                    {
+                        "id": str(c.pk),
+                        "extracted_name": c.extracted_name,
+                        "extracted_company": c.extracted_company,
+                        "confidence": c.confidence,
+                        "candidate_node": {
+                            "id": str(c.candidate_node.pk),
+                            "name": c.candidate_node.title,
+                            "properties": c.candidate_node.properties,
+                        }
+                        if c.candidate_node
+                        else None,
+                    }
+                    for c in pending
+                ],
+            }
+        )
+
+    # Also compute badge count
+    badge_count = Ingestion.objects.filter(status__in=ACTIVE_STATUSES).count()
+    badge_count += ResolutionCandidate.objects.filter(status=ResolutionStatus.PENDING).count()
+
+    return JsonResponse(
+        {
+            "results": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "badge_count": badge_count,
+        }
+    )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def api_ingestion_dismiss(request: HttpRequest, ingestion_id: str) -> JsonResponse:
+    """Dismiss a failed ingestion."""
+    ingestion = get_object_or_404(Ingestion, pk=ingestion_id)
+
+    if ingestion.status not in (IngestionStatus.FAILED, IngestionStatus.COMPLETE):
+        return JsonResponse(
+            {"error": "Can only dismiss failed or complete ingestions"},
+            status=400,
+        )
+
+    ingestion.status = IngestionStatus.DISMISSED
+    ingestion.save(update_fields=["status"])
+
+    return JsonResponse({"success": True})

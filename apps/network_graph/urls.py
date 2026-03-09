@@ -24,7 +24,9 @@ urlpatterns = [
     path("api/ingest/voice/", views.api_ingest_voice, name="api-ingest-voice"),
     path("api/ingest/document/", views.api_ingest_document, name="api-ingest-document"),
     path("api/ingest/note/", views.api_ingest_note, name="api-ingest-note"),
-    # Ingestion status & review
+    path("api/ingest/meeting/", views.api_ingest_meeting, name="api-ingest-meeting"),
+    # Ingestion list & status
+    path("api/ingestions/", views.api_ingestions_list, name="api-ingestions-list"),
     path(
         "api/ingestions/<str:ingestion_id>/status/",
         views.api_ingestion_status,
@@ -39,6 +41,11 @@ urlpatterns = [
         "api/ingestions/<str:ingestion_id>/retry/",
         views.api_ingestion_retry,
         name="api-ingestion-retry",
+    ),
+    path(
+        "api/ingestions/<str:ingestion_id>/dismiss/",
+        views.api_ingestion_dismiss,
+        name="api-ingestion-dismiss",
     ),
     # Resolution queue
     path(

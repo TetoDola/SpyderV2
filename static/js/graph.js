@@ -13,6 +13,17 @@ const API = {
   nodeSearch: "/api/nodes/search/",
   templates: "/api/templates/",
   import: "/api/import/",
+  // Pipeline & notifications
+  ingestMeeting: "/api/ingest/meeting/",
+  ingestNote: "/api/ingest/note/",
+  ingestVoice: "/api/ingest/voice/",
+  ingestDocument: "/api/ingest/document/",
+  ingestions: "/api/ingestions/",
+  ingestionReview: (id) => `/api/ingestions/${id}/review/`,
+  ingestionRetry: (id) => `/api/ingestions/${id}/retry/`,
+  ingestionDismiss: (id) => `/api/ingestions/${id}/dismiss/`,
+  resolutionQueue: "/api/resolution-queue/",
+  resolutionResolve: (id) => `/api/resolution-queue/${id}/resolve/`,
 };
 
 // ── System Locked Keys (cannot be deleted from node properties) ──
@@ -31,9 +42,25 @@ let currentView = "graph"; // "graph" | "table"
 let cachedGraphData = null; // store latest graph data for table
 let originalGraphData = { nodes: [], links: [] }; // untouched deep copy for search filtering
 let showGhosts = true;
+let currentPeekTab = "notes"; // "notes" | "summary"
+let currentNodeSummary = null; // cached summary data for current peek node
+let currentNodeType = "PERSON"; // cached node_type for current peek node
 
 // ── Marked.js config: enable single-line breaks ───────
 marked.use({ breaks: true });
+
+// ── Toast system ──────────────────────────────────────
+function showToast(message, type = "info") {
+  const container = document.getElementById("toast-container");
+  const el = document.createElement("div");
+  el.className = `toast-item toast-${type}`;
+  el.textContent = message;
+  container.appendChild(el);
+  setTimeout(() => {
+    el.classList.add("toast-out");
+    el.addEventListener("animationend", () => el.remove());
+  }, 3000);
+}
 
 // ── DOM refs ───────────────────────────────────────────
 const canvas = document.getElementById("graph-canvas");
@@ -623,6 +650,14 @@ async function openPeek(nodeId) {
   switchNotesMode("edit");
   renderProperties(node.properties || {});
 
+  // Store summary for the summary tab
+  currentNodeSummary = node.summary || null;
+  currentNodeType = node.node_type || "PERSON";
+
+  // Default to Summary tab if summary exists, Notes if not
+  const hasSummary = currentNodeSummary && Object.keys(currentNodeSummary).length > 0;
+  switchPeekTab(hasSummary ? "summary" : "notes");
+
   // Show delete button in edit mode
   peekDelete.classList.remove("hidden");
 
@@ -647,6 +682,11 @@ function openPeekCreate() {
   peekNotes.value = "";
   switchNotesMode("edit");
   renderProperties({});
+
+  // Reset summary state for create mode
+  currentNodeSummary = null;
+  currentNodeType = "PERSON";
+  switchPeekTab("notes");
 
   // Hide delete button in create mode
   peekDelete.classList.add("hidden");
@@ -1051,7 +1091,7 @@ async function deleteNode() {
 }
 
 // ── Event listeners ────────────────────────────────────
-fab.addEventListener("click", openPeekCreate);
+// FAB is now handled by fab.js — removed old fab.addEventListener("click", openPeekCreate);
 
 peekClose.addEventListener("click", closePeek);
 peekExpand.addEventListener("click", toggleExpand);
@@ -1071,10 +1111,18 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (!mentionDropdown.classList.contains("hidden")) {
       hideMentionDropdown();
+    } else if (typeof closeMeetingPanel === "function" && !document.getElementById("meeting-backdrop").classList.contains("hidden")) {
+      closeMeetingPanel();
+    } else if (typeof closeAddNotesPanel === "function" && !document.getElementById("addnotes-backdrop").classList.contains("hidden")) {
+      closeAddNotesPanel();
+    } else if (typeof closeNotifPanel === "function" && document.getElementById("notif-panel").classList.contains("notif-open")) {
+      closeNotifPanel();
     } else if (!settingsBackdrop.classList.contains("hidden")) {
       closeSettings();
     } else if (!peekBackdrop.classList.contains("hidden")) {
       closePeek();
+    } else if (typeof collapseFab === "function") {
+      collapseFab();
     }
   }
 });
@@ -1307,14 +1355,93 @@ ghostToggle.addEventListener("click", () => {
   if (currentView === "table") renderTable();
 });
 
+// ── Peek Modal: Notes/Summary Tab Toggle ────────────────
+const peekTabNotes = document.getElementById("peek-tab-notes");
+const peekTabSummary = document.getElementById("peek-tab-summary");
+const notesSubtabs = document.getElementById("notes-subtabs");
+const peekNotesSection = document.getElementById("peek-notes-section");
+const peekSummarySection = document.getElementById("peek-summary-section");
+const peekSummaryContent = document.getElementById("peek-summary-content");
+const peekSummaryEmpty = document.getElementById("peek-summary-empty");
+
+function switchPeekTab(tab) {
+  currentPeekTab = tab;
+  if (tab === "notes") {
+    peekNotesSection.classList.remove("hidden");
+    peekSummarySection.classList.add("hidden");
+    notesSubtabs.classList.remove("hidden");
+    peekTabNotes.classList.add("bg-white/10", "text-white/70");
+    peekTabNotes.classList.remove("bg-transparent", "text-white/30");
+    peekTabSummary.classList.add("bg-transparent", "text-white/30");
+    peekTabSummary.classList.remove("bg-white/10", "text-white/70");
+  } else {
+    peekNotesSection.classList.add("hidden");
+    peekSummarySection.classList.remove("hidden");
+    notesSubtabs.classList.add("hidden");
+    peekTabSummary.classList.add("bg-white/10", "text-white/70");
+    peekTabSummary.classList.remove("bg-transparent", "text-white/30");
+    peekTabNotes.classList.add("bg-transparent", "text-white/30");
+    peekTabNotes.classList.remove("bg-white/10", "text-white/70");
+    renderSummary();
+  }
+}
+
+function renderSummary() {
+  if (!currentNodeSummary || Object.keys(currentNodeSummary).length === 0) {
+    peekSummaryContent.classList.add("hidden");
+    peekSummaryEmpty.classList.remove("hidden");
+    return;
+  }
+  peekSummaryContent.classList.remove("hidden");
+  peekSummaryEmpty.classList.add("hidden");
+
+  const s = currentNodeSummary;
+  let html = "";
+
+  if (currentNodeType === "PERSON") {
+    if (s.role) html += summaryField("Role", escapeHtml(s.role));
+    if (s.how_we_know_each_other) html += summaryField("How we know each other", escapeHtml(s.how_we_know_each_other));
+    if (s.key_context && s.key_context.length) html += summaryField("Key context", bulletList(s.key_context));
+    if (s.follow_ups_involving_them && s.follow_ups_involving_them.length) html += summaryField("Open follow-ups", bulletList(s.follow_ups_involving_them));
+    if (s.last_interaction) html += summaryField("Last interaction", escapeHtml(s.last_interaction));
+    if (s.interaction_count != null) html += summaryField("Total interactions", String(s.interaction_count));
+  } else if (currentNodeType === "COMPANY") {
+    if (s.relationship_health) {
+      const cls = s.relationship_health === "strong" ? "health-strong" : s.relationship_health === "moderate" ? "health-moderate" : "health-weak";
+      html += summaryField("Relationship health", `<span class="summary-health-badge ${cls}">${escapeHtml(s.relationship_health)}</span>`);
+    }
+    if (s.total_contacts != null) html += summaryField("Total contacts", String(s.total_contacts));
+    if (s.key_context && s.key_context.length) html += summaryField("Key context", bulletList(s.key_context));
+    if (s.open_follow_ups && s.open_follow_ups.length) html += summaryField("Open follow-ups", bulletList(s.open_follow_ups));
+    if (s.last_interaction) html += summaryField("Last interaction", escapeHtml(s.last_interaction));
+  } else if (currentNodeType === "MEETING") {
+    if (s.one_liner) html += `<p class="text-white/80 font-medium mb-3">${escapeHtml(s.one_liner)}</p>`;
+    if (s.key_points && s.key_points.length) html += summaryField("Key points", bulletList(s.key_points));
+    if (s.decisions && s.decisions.length) html += summaryField("Decisions", bulletList(s.decisions));
+    if (s.follow_ups && s.follow_ups.length) html += summaryField("Follow-ups", bulletList(s.follow_ups));
+  }
+
+  peekSummaryContent.innerHTML = html || '<p class="text-white/20 text-sm">No summary data available.</p>';
+}
+
+function summaryField(label, value) {
+  return `<div class="summary-field"><div class="summary-field-label">${label}</div><div class="summary-field-value">${value}</div></div>`;
+}
+
+function bulletList(items) {
+  return "<ul>" + items.map((i) => `<li>${escapeHtml(i)}</li>`).join("") + "</ul>";
+}
+
+peekTabNotes.addEventListener("click", () => switchPeekTab("notes"));
+peekTabSummary.addEventListener("click", () => switchPeekTab("summary"));
+
 // ── Folder Import ───────────────────────────────────────
 function showImportToast(msg) {
-  importToastText.textContent = msg;
-  importToast.classList.remove("hidden");
+  showToast(msg, "info");
 }
 
 function hideImportToast() {
-  importToast.classList.add("hidden");
+  // No-op — toasts auto-dismiss now
 }
 
 importBtn.addEventListener("click", () => {

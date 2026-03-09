@@ -23,7 +23,10 @@
       "Bash(uv run ruff check . --exclude \"*/migrations/*\")",
       "Bash(uv run ruff check . --exclude \"*/migrations/*\" --select E,F,I,N,UP,B,SIM)",
       "Bash(uv run ruff check . --exclude \"*/migrations/*\" --fix)",
-      "Bash(uv run ruff format . --exclude \"*/migrations/*\")"
+      "Bash(uv run ruff format . --exclude \"*/migrations/*\")",
+      "Bash(uv run ruff check apps/network_graph/views.py)",
+      "Bash(uv run ruff check apps/network_graph/views.py apps/network_graph/urls.py)",
+      "Bash(uv run ruff format apps/network_graph/views.py apps/network_graph/models.py apps/network_graph/urls.py)"
     ]
   }
 }

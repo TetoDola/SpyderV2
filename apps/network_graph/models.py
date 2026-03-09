@@ -106,6 +106,7 @@ class IngestionSourceType(models.TextChoices):
     VOICE_NOTE = "VOICE_NOTE", "Voice Note"
     DOCUMENT = "DOCUMENT", "Document"
     FREEFORM_NOTE = "FREEFORM_NOTE", "Freeform Note"
+    MEETING = "MEETING", "Meeting"
 
 
 class IngestionStatus(models.TextChoices):
@@ -117,6 +118,7 @@ class IngestionStatus(models.TextChoices):
     SUMMARIZING = "SUMMARIZING", "Summarizing"
     COMPLETE = "COMPLETE", "Complete"
     FAILED = "FAILED", "Failed"
+    DISMISSED = "DISMISSED", "Dismissed"
 
 
 class Ingestion(models.Model):
@@ -134,6 +136,8 @@ class Ingestion(models.Model):
         choices=IngestionStatus.choices,
         default=IngestionStatus.PENDING,
     )
+    title = models.CharField(max_length=255, blank=True, default="")
+    auto_create = models.BooleanField(default=True)
     error_message = models.TextField(blank=True, default="")
     failed_step = models.CharField(max_length=20, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
