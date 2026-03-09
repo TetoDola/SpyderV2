@@ -2,7 +2,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
-db.sqlite3
+*.sqlite3
 staticfiles/
 media/
 .ruff_cache/
@@ -22,3 +22,6 @@ dist/
 htmlcov/
 node_modules/
 build/
+
+# Docker
+docker-compose.override.yml

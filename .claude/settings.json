@@ -29,7 +29,11 @@
       "Bash(uv run ruff format apps/network_graph/views.py apps/network_graph/models.py apps/network_graph/urls.py)",
       "WebFetch(domain:developers.deepgram.com)",
       "WebFetch(domain:openrouter.ai)",
-      "Bash(uv run ruff check apps/network_graph/services/extraction.py apps/network_graph/services/summarization.py config/settings.py)"
+      "Bash(uv run ruff check apps/network_graph/services/extraction.py apps/network_graph/services/summarization.py config/settings.py)",
+      "Read(//c/Users/Teto/Documents/sourcecodes/Spyder/ V2/apps/network_graph/**)",
+      "Read(//c/Users/Teto/Documents/sourcecodes/Spyder/ V2/apps/network_graph/services/**)",
+      "Bash(cd /c/Users/Teto/Documents/sourcecodes/\"Spyder V2\")",
+      "Bash(grep -n \"innerHTML\\\\|eval\\\\|dangerouslySetInnerHTML\" static/js/*.js)"
     ]
   }
 }

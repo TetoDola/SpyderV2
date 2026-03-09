@@ -42,15 +42,15 @@ function openNotifPanel() {
   notifPanel.classList.add("notif-open");
   notifOverlay.classList.remove("hidden");
   refreshNotifications();
-  startPolling();
+  // Polling starts automatically in refreshNotifications if badge > 0
 }
 
 function closeNotifPanel() {
   notifPanelOpen = false;
   notifPanel.classList.remove("notif-open");
   notifOverlay.classList.add("hidden");
-  // Keep polling if badge > 0
-  if (notifBadgeCount <= 0) stopPolling();
+  // Stop polling when panel closes — badge check on next open will restart if needed
+  stopPolling();
 }
 
 notifBell.addEventListener("click", () => {
@@ -119,9 +119,9 @@ async function refreshNotifications() {
       notifLoadMore.classList.add("hidden");
     }
 
-    // Auto-start polling if there are active items
+    // Poll only while there are active (in-progress) items
     if (notifBadgeCount > 0) startPolling();
-    else if (!notifPanelOpen) stopPolling();
+    else stopPolling();
   } catch {
     // Silently fail on poll errors
   }
@@ -226,6 +226,9 @@ function createCard(item) {
       <div class="notif-card-subtitle">Step ${step.idx + 1}/${TOTAL_STEPS}: ${step.label}</div>
       <div class="notif-progress"><div class="notif-progress-bar" style="width: ${progress}%"></div></div>
       <div class="notif-card-subtitle mt-1">${timeAgo}</div>
+      <div class="notif-card-actions">
+        <button class="notif-btn-danger" data-action="cancel" data-id="${item.id}">Cancel</button>
+      </div>
     `;
   } else if (state === "review") {
     const count = item.pending_resolutions ? item.pending_resolutions.length : 0;
@@ -235,6 +238,7 @@ function createCard(item) {
       <div class="notif-card-subtitle">${timeAgo}</div>
       <div class="notif-card-actions">
         <button class="notif-btn-primary" data-action="review" data-id="${item.id}">Review</button>
+        <button class="notif-btn-danger" data-action="delete" data-id="${item.id}">Delete</button>
       </div>
     `;
   } else if (state === "complete") {
@@ -245,6 +249,7 @@ function createCard(item) {
       <div class="notif-card-actions">
         <button class="notif-btn-ghost" data-action="expand" data-id="${item.id}">View details</button>
         <button class="notif-btn-ghost" data-action="viewgraph" data-id="${item.id}">View in Graph</button>
+        <button class="notif-btn-danger" data-action="delete" data-id="${item.id}">Delete</button>
       </div>
     `;
   } else if (state === "failed") {
@@ -255,7 +260,7 @@ function createCard(item) {
       <div class="notif-card-subtitle">${timeAgo}</div>
       <div class="notif-card-actions">
         <button class="notif-btn-primary" data-action="retry" data-id="${item.id}">Retry</button>
-        <button class="notif-btn-danger" data-action="dismiss" data-id="${item.id}">Dismiss</button>
+        <button class="notif-btn-danger" data-action="delete" data-id="${item.id}">Delete</button>
       </div>
     `;
   }
@@ -285,7 +290,18 @@ function createCard(item) {
 
 // ── Card actions ──────────────────────────────────────
 async function handleCardAction(action, id, item) {
-  if (action === "retry") {
+  if (action === "cancel") {
+    if (!confirm("Cancel this ingestion and delete everything it created?")) return;
+    // Dismiss first (marks as failed/dismissed), then delete to clean up
+    const res = await fetch(API.ingestionDelete(id), { method: "DELETE" });
+    if (res.ok) {
+      showToast("Ingestion cancelled", "info");
+      refreshNotifications();
+      if (typeof loadGraph === "function") loadGraph();
+    } else {
+      showToast("Failed to cancel", "error");
+    }
+  } else if (action === "retry") {
     const res = await fetch(API.ingestionRetry(id), { method: "POST" });
     if (res.ok) {
       showToast("Retrying...", "info");
@@ -295,6 +311,22 @@ async function handleCardAction(action, id, item) {
     const res = await fetch(API.ingestionDismiss(id), { method: "POST" });
     if (res.ok) {
       refreshNotifications();
+    }
+  } else if (action === "delete") {
+    if (!confirm("Delete this ingestion and everything it created (nodes, connections)?")) return;
+    const res = await fetch(API.ingestionDelete(id), { method: "DELETE" });
+    if (res.ok) {
+      const data = await res.json();
+      showToast(
+        `Deleted: ${data.deleted_nodes} node${data.deleted_nodes !== 1 ? "s" : ""}, ` +
+        `${data.deleted_connections} connection${data.deleted_connections !== 1 ? "s" : ""}`,
+        "info",
+      );
+      refreshNotifications();
+      // Reload graph to reflect removed nodes
+      if (typeof loadGraph === "function") loadGraph();
+    } else {
+      showToast("Failed to delete ingestion", "error");
     }
   } else if (action === "expand") {
     expandedCardId = expandedCardId === id ? null : id;

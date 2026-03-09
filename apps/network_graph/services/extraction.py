@@ -176,31 +176,59 @@ def _extract_openrouter(raw_text: str) -> dict[str, object]:
         },
     )
 
-    response = client.chat.completions.create(
-        model=model,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    f"Extract all entities from the following text. "
-                    f"Return JSON matching this schema:\n"
-                    f"{json.dumps(EXTRACTION_JSON_SCHEMA, indent=2)}\n\n"
-                    f"Text:\n{raw_text}"
-                ),
-            },
-        ],
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Extract all entities from the following text. "
+                        f"Return JSON matching this schema:\n"
+                        f"{json.dumps(EXTRACTION_JSON_SCHEMA, indent=2)}\n\n"
+                        f"Text:\n{raw_text}"
+                    ),
+                },
+            ],
+        )
+    except Exception as e:
+        raise ExtractionError(f"OpenRouter API call failed: {e}") from e
+
+    choice = response.choices[0] if response.choices else None
+    if not choice:
+        raise ExtractionError("OpenRouter returned no choices")
+
+    content = choice.message.content or ""
+    content = content.strip()
+
+    # Log for debugging
+    finish_reason = getattr(choice, "finish_reason", "unknown")
+    logger.info(
+        "OpenRouter extraction: model=%s, finish_reason=%s, content_len=%d",
+        model, finish_reason, len(content),
     )
 
-    content = response.choices[0].message.content
     if not content:
-        raise ExtractionError("Empty response from OpenRouter")
+        refusal = getattr(choice.message, "refusal", None)
+        raise ExtractionError(
+            f"Empty response from OpenRouter (finish_reason={finish_reason}, "
+            f"refusal={refusal})"
+        )
+
+    # Strip markdown code fences if present
+    if content.startswith("```"):
+        lines = content.split("\n")
+        lines = [ln for ln in lines if not ln.strip().startswith("```")]
+        content = "\n".join(lines)
 
     try:
         result = json.loads(content)
     except json.JSONDecodeError as e:
-        raise ExtractionError(f"Invalid JSON from OpenRouter: {e}") from e
+        raise ExtractionError(
+            f"Invalid JSON from OpenRouter: {e}\nRaw: {content[:500]}"
+        ) from e
 
     if not isinstance(result, dict):
         raise ExtractionError(f"Expected dict, got {type(result)}")

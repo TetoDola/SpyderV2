@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 
 import frontmatter
@@ -20,6 +21,9 @@ from apps.network_graph.models import (
 )
 from apps.network_graph.parser import process_auto_links
 
+logger = logging.getLogger(__name__)
+
+
 # Active statuses for notification badge count
 ACTIVE_STATUSES = [
     IngestionStatus.PENDING,
@@ -37,6 +41,24 @@ OBSIDIAN_LINK_RE = re.compile(r"(?<!!)\[\[([^\]]+)\]\]")
 
 AUDIO_EXTENSIONS = {".m4a", ".mp3", ".wav", ".ogg", ".webm"}
 DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
+
+
+def _pick_ingestion_task(ingestion: Ingestion) -> object:
+    """Choose the right Celery task based on whether a file is attached."""
+    from apps.network_graph.tasks import (
+        process_document,
+        process_freeform_note,
+        process_voice_note,
+    )
+
+    if ingestion.original_file:
+        name = ingestion.original_file.name or ""
+        ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
+        if ext in AUDIO_EXTENSIONS:
+            return process_voice_note
+        if ext in DOCUMENT_EXTENSIONS:
+            return process_document
+    return process_freeform_note
 
 
 @require_GET
@@ -531,9 +553,7 @@ def api_ingest_note(request: HttpRequest) -> JsonResponse:
         status=IngestionStatus.PENDING,
     )
 
-    from apps.network_graph.tasks import process_freeform_note
-
-    process_freeform_note.delay(str(ingestion.pk))
+    _pick_ingestion_task(ingestion).delay(str(ingestion.pk))
 
     return JsonResponse(
         {
@@ -640,9 +660,7 @@ def api_ingest_meeting(request: HttpRequest) -> JsonResponse:
         status=IngestionStatus.PENDING,
     )
 
-    from apps.network_graph.tasks import process_freeform_note
-
-    process_freeform_note.delay(str(ingestion.pk))
+    _pick_ingestion_task(ingestion).delay(str(ingestion.pk))
 
     return JsonResponse(
         {
@@ -1002,3 +1020,82 @@ def api_ingestion_dismiss(request: HttpRequest, ingestion_id: str) -> JsonRespon
     ingestion.save(update_fields=["status"])
 
     return JsonResponse({"success": True})
+
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+def api_ingestion_delete(request: HttpRequest, ingestion_id: str) -> JsonResponse:
+    """Delete an ingestion and all nodes/connections it created.
+
+    Parses ``dsl_commands`` to find every CREATE_NODE and CONNECT entry,
+    then deletes those objects before deleting the Ingestion itself.
+    ResolutionCandidates cascade-delete automatically via FK.
+    """
+    ingestion = get_object_or_404(Ingestion, pk=ingestion_id)
+
+    commands = ingestion.dsl_commands if isinstance(ingestion.dsl_commands, list) else []
+    extracted = ingestion.extracted_json if isinstance(ingestion.extracted_json, dict) else {}
+
+    # Collect IDs of nodes this ingestion created
+    created_node_ids: set[str] = set()
+    for cmd in commands:
+        if not isinstance(cmd, dict):
+            continue
+        if cmd.get("command") == "CREATE_NODE":
+            nid = cmd.get("node_id")
+            if nid:
+                created_node_ids.add(str(nid))
+
+    # Also include the meeting node (may not appear in dsl_commands if created
+    # by the graph writer before the DSL context was set up).
+    meeting_node_id = extracted.get("_meeting_node_id")
+    if meeting_node_id:
+        created_node_ids.add(str(meeting_node_id))
+
+    # Collect connection IDs that were created (not pre-existing)
+    created_conn_pairs: list[tuple[str, str, str]] = []
+    for cmd in commands:
+        if not isinstance(cmd, dict):
+            continue
+        if cmd.get("command") == "CONNECT" and cmd.get("created"):
+            src = cmd.get("source_id", "")
+            tgt = cmd.get("target_id", "")
+            lbl = cmd.get("label", "")
+            if src and tgt:
+                created_conn_pairs.append((str(src), str(tgt), str(lbl)))
+
+    deleted_nodes = 0
+    deleted_connections = 0
+
+    # Delete connections first (to avoid FK issues)
+    for src, tgt, lbl in created_conn_pairs:
+        count, _ = Connection.objects.filter(
+            source_id=src, target_id=tgt, relationship_label=lbl,
+        ).delete()
+        deleted_connections += count
+
+    # Also delete any connections TO or FROM created nodes (even if not
+    # logged as "created" — e.g. connections added by resolution later).
+    if created_node_ids:
+        count, _ = Connection.objects.filter(source_id__in=created_node_ids).delete()
+        deleted_connections += count
+        count, _ = Connection.objects.filter(target_id__in=created_node_ids).delete()
+        deleted_connections += count
+
+    # Delete the created nodes
+    if created_node_ids:
+        deleted_nodes, _ = Node.objects.filter(pk__in=created_node_ids).delete()
+
+    # Delete the ingestion (cascades ResolutionCandidates)
+    ingestion.delete()
+
+    logger.info(
+        "Deleted ingestion %s: %d nodes, %d connections removed",
+        ingestion_id, deleted_nodes, deleted_connections,
+    )
+
+    return JsonResponse({
+        "success": True,
+        "deleted_nodes": deleted_nodes,
+        "deleted_connections": deleted_connections,
+    })

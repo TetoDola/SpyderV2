@@ -47,6 +47,11 @@ urlpatterns = [
         views.api_ingestion_dismiss,
         name="api-ingestion-dismiss",
     ),
+    path(
+        "api/ingestions/<str:ingestion_id>/delete/",
+        views.api_ingestion_delete,
+        name="api-ingestion-delete",
+    ),
     # Resolution queue
     path(
         "api/resolution-queue/",

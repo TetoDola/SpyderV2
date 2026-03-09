@@ -22,6 +22,7 @@ const API = {
   ingestionReview: (id) => `/api/ingestions/${id}/review/`,
   ingestionRetry: (id) => `/api/ingestions/${id}/retry/`,
   ingestionDismiss: (id) => `/api/ingestions/${id}/dismiss/`,
+  ingestionDelete: (id) => `/api/ingestions/${id}/delete/`,
   resolutionQueue: "/api/resolution-queue/",
   resolutionResolve: (id) => `/api/resolution-queue/${id}/resolve/`,
 };
