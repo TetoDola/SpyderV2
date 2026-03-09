@@ -15,11 +15,16 @@ env = environ.Env(
     DB_PORT=(str, "5432"),
     CELERY_BROKER_URL=(str, "redis://localhost:6379/0"),
     CELERY_RESULT_BACKEND=(str, "redis://localhost:6379/0"),
-    LLM_PROVIDER=(str, "anthropic"),
+    LLM_PROVIDER=(str, "openrouter"),
     ANTHROPIC_API_KEY=(str, ""),
     OPENAI_API_KEY=(str, ""),
-    TRANSCRIPTION_API_URL=(str, "http://localhost:8001/transcribe"),
+    OPENROUTER_API_KEY=(str, ""),
+    OPENROUTER_BASE_URL=(str, "https://openrouter.ai/api/v1"),
+    OPENROUTER_MODEL=(str, "anthropic/claude-sonnet-4"),
+    TRANSCRIPTION_API_URL=(str, "https://api.deepgram.com/v1/listen"),
     TRANSCRIPTION_API_KEY=(str, ""),
+    TRANSCRIPTION_MODEL=(str, "nova-3"),
+    TRANSCRIPTION_LANGUAGE=(str, "en"),
 )
 
 environ.Env.read_env(BASE_DIR / ".env")
@@ -111,9 +116,14 @@ CELERY_TIMEZONE = TIME_ZONE
 LLM_PROVIDER = env("LLM_PROVIDER")
 ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY")
 OPENAI_API_KEY = env("OPENAI_API_KEY")
+OPENROUTER_API_KEY = env("OPENROUTER_API_KEY")
+OPENROUTER_BASE_URL = env("OPENROUTER_BASE_URL")
+OPENROUTER_MODEL = env("OPENROUTER_MODEL")
 
 # ---------------------------------------------------------------------------
 # Transcription
 # ---------------------------------------------------------------------------
 TRANSCRIPTION_API_URL = env("TRANSCRIPTION_API_URL")
 TRANSCRIPTION_API_KEY = env("TRANSCRIPTION_API_KEY")
+TRANSCRIPTION_MODEL = env("TRANSCRIPTION_MODEL")
+TRANSCRIPTION_LANGUAGE = env("TRANSCRIPTION_LANGUAGE")

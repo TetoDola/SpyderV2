@@ -190,6 +190,8 @@ def _call_llm(system_prompt: str, user_prompt: str) -> dict[str, object]:
         return _call_anthropic(system_prompt, user_prompt)
     elif provider == "openai":
         return _call_openai(system_prompt, user_prompt)
+    elif provider == "openrouter":
+        return _call_openrouter(system_prompt, user_prompt)
     else:
         raise SummarizationError(f"Unsupported LLM provider: {provider}")
 
@@ -231,6 +233,39 @@ def _call_openai(system_prompt: str, user_prompt: str) -> dict[str, object]:
 
     response = client.chat.completions.create(
         model="gpt-4o",
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    )
+
+    content = response.choices[0].message.content or ""
+    return _parse_json_response(content)
+
+
+def _call_openrouter(system_prompt: str, user_prompt: str) -> dict[str, object]:
+    """Call OpenRouter (OpenAI-compatible) for summarization."""
+    import openai
+
+    api_key: str = settings.OPENROUTER_API_KEY
+    if not api_key:
+        raise SummarizationError("OPENROUTER_API_KEY not configured")
+
+    base_url: str = settings.OPENROUTER_BASE_URL
+    model: str = settings.OPENROUTER_MODEL
+
+    client = openai.OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        default_headers={
+            "HTTP-Referer": "https://unforgetting.app",
+            "X-Title": "Unforgetting",
+        },
+    )
+
+    response = client.chat.completions.create(
+        model=model,
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": system_prompt},

@@ -68,6 +68,8 @@ def extract_entities(raw_text: str) -> dict[str, object]:
         return _extract_anthropic(raw_text)
     elif provider == "openai":
         return _extract_openai(raw_text)
+    elif provider == "openrouter":
+        return _extract_openrouter(raw_text)
     else:
         raise ExtractionError(f"Unsupported LLM provider: {provider}")
 
@@ -147,6 +149,58 @@ def _extract_openai(raw_text: str) -> dict[str, object]:
         result = json.loads(content)
     except json.JSONDecodeError as e:
         raise ExtractionError(f"Invalid JSON from OpenAI: {e}") from e
+
+    if not isinstance(result, dict):
+        raise ExtractionError(f"Expected dict, got {type(result)}")
+
+    return result
+
+
+def _extract_openrouter(raw_text: str) -> dict[str, object]:
+    """Extract using OpenRouter (OpenAI-compatible API)."""
+    import openai
+
+    api_key: str = settings.OPENROUTER_API_KEY
+    if not api_key:
+        raise ExtractionError("OPENROUTER_API_KEY not configured")
+
+    base_url: str = settings.OPENROUTER_BASE_URL
+    model: str = settings.OPENROUTER_MODEL
+
+    client = openai.OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        default_headers={
+            "HTTP-Referer": "https://unforgetting.app",
+            "X-Title": "Unforgetting",
+        },
+    )
+
+    response = client.chat.completions.create(
+        model=model,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"Extract all entities from the following text. "
+                    f"Return JSON matching this schema:\n"
+                    f"{json.dumps(EXTRACTION_JSON_SCHEMA, indent=2)}\n\n"
+                    f"Text:\n{raw_text}"
+                ),
+            },
+        ],
+    )
+
+    content = response.choices[0].message.content
+    if not content:
+        raise ExtractionError("Empty response from OpenRouter")
+
+    try:
+        result = json.loads(content)
+    except json.JSONDecodeError as e:
+        raise ExtractionError(f"Invalid JSON from OpenRouter: {e}") from e
 
     if not isinstance(result, dict):
         raise ExtractionError(f"Expected dict, got {type(result)}")
