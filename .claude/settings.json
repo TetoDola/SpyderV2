@@ -11,7 +11,19 @@
       "Bash(uv run python -m py_compile apps/network_graph/views.py)",
       "Read(//c/Users/Teto/Documents/Spyder/Entities/**)",
       "Bash(uv run python -m py_compile apps/network_graph/parser.py)",
-      "Bash(uv run python manage.py shell -c \":*)"
+      "Bash(uv run python manage.py shell -c \":*)",
+      "Bash(uv run python manage.py makemigrations)",
+      "Bash(.venv/Scripts/python.exe manage.py makemigrations)",
+      "Bash(.venv/Scripts/python.exe -c \"import django; django.setup\\(\\); print\\(''OK''\\)\")",
+      "Bash(DJANGO_SETTINGS_MODULE=config.settings .venv/Scripts/python.exe -c \"import django; django.setup\\(\\); print\\(''OK''\\)\")",
+      "Bash(DJANGO_SETTINGS_MODULE=config.settings .venv/Scripts/python.exe manage.py makemigrations)",
+      "Bash(DB_ENGINE=django.db.backends.sqlite3 DB_NAME=db.sqlite3 DB_USER=\"\" DB_PASSWORD=\"\" DB_HOST=\"\" DB_PORT=\"\" DJANGO_SETTINGS_MODULE=config.settings .venv/Scripts/python.exe manage.py makemigrations)",
+      "Bash(DB_ENGINE=django.db.backends.sqlite3 DB_NAME=db.sqlite3 DB_USER=\"\" DB_PASSWORD=\"\" DB_HOST=\"\" DB_PORT=\"\" DJANGO_SETTINGS_MODULE=config.settings .venv/Scripts/python.exe manage.py makemigrations network_graph)",
+      "Bash(uv run ruff check .)",
+      "Bash(uv run ruff check . --exclude \"*/migrations/*\")",
+      "Bash(uv run ruff check . --exclude \"*/migrations/*\" --select E,F,I,N,UP,B,SIM)",
+      "Bash(uv run ruff check . --exclude \"*/migrations/*\" --fix)",
+      "Bash(uv run ruff format . --exclude \"*/migrations/*\")"
     ]
   }
 }

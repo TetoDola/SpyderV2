@@ -1,15 +1,17 @@
-"""@mention parser with connection diffing and ghost node support."""
+"""@mention parser with connection diffing and ghost node support.
+
+All graph mutations route through the DSL layer.
+"""
 
 import re
 
+from apps.network_graph.dsl import DSLContext, connect, create_node
 from apps.network_graph.models import Connection, Node
 
 # Two patterns:
 # 1. @[Complex Name (with parens, dots, etc.)] — bracket-delimited (from Obsidian import)
 # 2. @Simple Name — word chars and spaces until a delimiter (from UI @mentions)
-MENTION_RE = re.compile(
-    r"@\[([^\]]+)\]|@([\w][\w ]*?)(?=[,.\n@]|$)", re.UNICODE
-)
+MENTION_RE = re.compile(r"@\[([^\]]+)\]|@([\w][\w ]*?)(?=[,.\n@]|$)", re.UNICODE)
 
 
 def extract_mentions(text: str) -> list[str]:
@@ -17,9 +19,7 @@ def extract_mentions(text: str) -> list[str]:
     raw = MENTION_RE.findall(text)  # list of (bracket_match, simple_match)
     return list(
         dict.fromkeys(
-            (bracket or simple).strip()
-            for bracket, simple in raw
-            if (bracket or simple).strip()
+            (bracket or simple).strip() for bracket, simple in raw if (bracket or simple).strip()
         )
     )
 
@@ -50,8 +50,14 @@ def _collect_desired_connections(
     return desired
 
 
-def sync_connections(node: Node) -> None:
-    """Diff current connections against mentions and create/delete as needed."""
+def sync_connections(node: Node, ctx: DSLContext | None = None) -> None:
+    """Diff current connections against mentions and create/delete as needed.
+
+    All graph mutations go through the DSL layer for audit logging.
+    """
+    if ctx is None:
+        ctx = DSLContext()
+
     desired = _collect_desired_connections(node)
 
     # Resolve or create target nodes — collect mapping title -> Node
@@ -61,9 +67,10 @@ def sync_connections(node: Node) -> None:
             # Case-insensitive lookup to avoid duplicate ghosts
             target_node = Node.objects.filter(title__iexact=title).first()
             if not target_node:
-                target_node = Node.objects.create(
-                    title=title,
+                target_node = create_node(
+                    ctx,
                     node_type="PERSON",
+                    title=title,
                     is_ghost=True,
                 )
             target_map[title] = target_node
@@ -89,16 +96,12 @@ def sync_connections(node: Node) -> None:
     for edge_key in to_delete:
         existing_map[edge_key].delete()
 
-    # CREATE new edges
+    # CREATE new edges via DSL
     to_create = desired_edges - existing_edges
     for target_id, label in to_create:
-        Connection.objects.get_or_create(
-            source=node,
-            target_id=target_id,
-            relationship_label=label,
-        )
+        connect(ctx, source_id=str(node.pk), target_id=target_id, relationship_label=label)
 
 
-def process_auto_links(node: Node) -> None:
+def process_auto_links(node: Node, ctx: DSLContext | None = None) -> None:
     """Run the full mention parse + connection diff/sync."""
-    sync_connections(node)
+    sync_connections(node, ctx)

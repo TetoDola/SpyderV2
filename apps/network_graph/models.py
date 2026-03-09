@@ -1,5 +1,4 @@
 import uuid
-from typing import Any
 
 from django.db import models
 
@@ -35,6 +34,7 @@ class Node(models.Model):
     node_type = models.CharField(max_length=10, choices=NodeType.choices, default=NodeType.PERSON)
     properties = models.JSONField(default=dict, blank=True)
     notes = models.TextField(blank=True, default="")
+    summary = models.JSONField(default=dict, blank=True)
     is_ghost = models.BooleanField(default=False)
     profile_image = models.ImageField(upload_to="node_images/", blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -45,7 +45,7 @@ class Node(models.Model):
     def __str__(self) -> str:
         return f"{self.title} ({self.node_type})"
 
-    def save(self, *args: Any, **kwargs: Any) -> None:
+    def save(self, *args: object, **kwargs: object) -> None:
         if self._state.adding and isinstance(self.properties, dict):
             # 1. Apply system locked defaults (setdefault preserves user-supplied values)
             locked = SYSTEM_LOCKED_DEFAULTS.get(self.node_type, {})
@@ -95,3 +95,99 @@ class Connection(models.Model):
     def __str__(self) -> str:
         label = f" ({self.relationship_label})" if self.relationship_label else ""
         return f"{self.source.title} → {self.target.title}{label}"
+
+
+# ---------------------------------------------------------------------------
+# Pipeline Models
+# ---------------------------------------------------------------------------
+
+
+class IngestionSourceType(models.TextChoices):
+    VOICE_NOTE = "VOICE_NOTE", "Voice Note"
+    DOCUMENT = "DOCUMENT", "Document"
+    FREEFORM_NOTE = "FREEFORM_NOTE", "Freeform Note"
+
+
+class IngestionStatus(models.TextChoices):
+    PENDING = "PENDING", "Pending"
+    TRANSCRIBING = "TRANSCRIBING", "Transcribing"
+    EXTRACTING = "EXTRACTING", "Extracting"
+    RESOLVING = "RESOLVING", "Resolving"
+    WRITING = "WRITING", "Writing"
+    SUMMARIZING = "SUMMARIZING", "Summarizing"
+    COMPLETE = "COMPLETE", "Complete"
+    FAILED = "FAILED", "Failed"
+
+
+class Ingestion(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    source_type = models.CharField(
+        max_length=20,
+        choices=IngestionSourceType.choices,
+    )
+    original_file = models.FileField(upload_to="ingestions/", blank=True, null=True)
+    raw_text = models.TextField(blank=True, default="")
+    extracted_json = models.JSONField(default=dict, blank=True)
+    dsl_commands = models.JSONField(default=list, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=IngestionStatus.choices,
+        default=IngestionStatus.PENDING,
+    )
+    error_message = models.TextField(blank=True, default="")
+    failed_step = models.CharField(max_length=20, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"Ingestion {self.id} ({self.source_type} / {self.status})"
+
+
+class ResolutionStatus(models.TextChoices):
+    PENDING = "PENDING", "Pending"
+    CONFIRMED = "CONFIRMED", "Confirmed"
+    REJECTED = "REJECTED", "Rejected"
+    AUTO_LINKED = "AUTO_LINKED", "Auto-Linked"
+
+
+class ResolutionCandidate(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    ingestion = models.ForeignKey(
+        Ingestion,
+        on_delete=models.CASCADE,
+        related_name="resolution_candidates",
+    )
+    extracted_name = models.CharField(max_length=255)
+    extracted_email = models.CharField(max_length=255, blank=True, default="")
+    extracted_company = models.CharField(max_length=255, blank=True, default="")
+    extracted_title = models.CharField(max_length=255, blank=True, default="")
+    candidate_node = models.ForeignKey(
+        Node,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="resolution_matches",
+    )
+    confidence = models.FloatField(default=0.0)
+    status = models.CharField(
+        max_length=20,
+        choices=ResolutionStatus.choices,
+        default=ResolutionStatus.PENDING,
+    )
+    resolved_node = models.ForeignKey(
+        Node,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="resolved_from",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"Resolution: {self.extracted_name} ({self.status})"

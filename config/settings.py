@@ -1,14 +1,32 @@
-import os
 from pathlib import Path
+
+import environ
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get(
-    "DJANGO_SECRET_KEY",
-    "django-insecure-dev-only-change-in-production-x9k2m4p7q1",
+env = environ.Env(
+    DJANGO_DEBUG=(bool, True),
+    DJANGO_SECRET_KEY=(str, "django-insecure-dev-only-change-in-production-x9k2m4p7q1"),
+    DB_ENGINE=(str, "django.db.backends.postgresql"),
+    DB_NAME=(str, "unforgetting"),
+    DB_USER=(str, "postgres"),
+    DB_PASSWORD=(str, ""),
+    DB_HOST=(str, "localhost"),
+    DB_PORT=(str, "5432"),
+    CELERY_BROKER_URL=(str, "redis://localhost:6379/0"),
+    CELERY_RESULT_BACKEND=(str, "redis://localhost:6379/0"),
+    LLM_PROVIDER=(str, "anthropic"),
+    ANTHROPIC_API_KEY=(str, ""),
+    OPENAI_API_KEY=(str, ""),
+    TRANSCRIPTION_API_URL=(str, "http://localhost:8001/transcribe"),
+    TRANSCRIPTION_API_KEY=(str, ""),
 )
 
-DEBUG = os.environ.get("DJANGO_DEBUG", "True").lower() in ("true", "1", "yes")
+environ.Env.read_env(BASE_DIR / ".env")
+
+SECRET_KEY = env("DJANGO_SECRET_KEY")
+
+DEBUG = env("DJANGO_DEBUG")
 
 ALLOWED_HOSTS: list[str] = ["*"]
 
@@ -54,12 +72,12 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 DATABASES = {
     "default": {
-        "ENGINE": os.environ.get("DB_ENGINE", "django.db.backends.sqlite3"),
-        "NAME": os.environ.get("DB_NAME", str(BASE_DIR / "db.sqlite3")),
-        "USER": os.environ.get("DB_USER", ""),
-        "PASSWORD": os.environ.get("DB_PASSWORD", ""),
-        "HOST": os.environ.get("DB_HOST", ""),
-        "PORT": os.environ.get("DB_PORT", ""),
+        "ENGINE": env("DB_ENGINE"),
+        "NAME": env("DB_NAME"),
+        "USER": env("DB_USER"),
+        "PASSWORD": env("DB_PASSWORD"),
+        "HOST": env("DB_HOST"),
+        "PORT": env("DB_PORT"),
     }
 }
 
@@ -76,3 +94,26 @@ LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
+
+# ---------------------------------------------------------------------------
+# Celery
+# ---------------------------------------------------------------------------
+CELERY_BROKER_URL = env("CELERY_BROKER_URL")
+CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND")
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+
+# ---------------------------------------------------------------------------
+# LLM / AI Services
+# ---------------------------------------------------------------------------
+LLM_PROVIDER = env("LLM_PROVIDER")
+ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY")
+OPENAI_API_KEY = env("OPENAI_API_KEY")
+
+# ---------------------------------------------------------------------------
+# Transcription
+# ---------------------------------------------------------------------------
+TRANSCRIPTION_API_URL = env("TRANSCRIPTION_API_URL")
+TRANSCRIPTION_API_KEY = env("TRANSCRIPTION_API_KEY")
