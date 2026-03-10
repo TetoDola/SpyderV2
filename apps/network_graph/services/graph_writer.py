@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from django.db import transaction
+
 from apps.network_graph.dsl import DSLContext, connect, create_node, update_profile
 from apps.network_graph.models import Ingestion, Node
 from apps.network_graph.schema import (
@@ -22,6 +24,7 @@ from apps.network_graph.services.resolution import ResolvedEntity
 logger = logging.getLogger(__name__)
 
 
+@transaction.atomic
 def write_graph(
     ctx: DSLContext,
     ingestion: Ingestion,
@@ -30,6 +33,9 @@ def write_graph(
     extracted_json: dict[str, object],
 ) -> Node | None:
     """Write resolved entities and relationships to the graph.
+
+    All node/edge mutations are wrapped in a single transaction.
+    If any step fails, everything is rolled back.
 
     Returns the MEETING node created for this ingestion (if applicable).
     """

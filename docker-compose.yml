@@ -30,9 +30,12 @@ services:
     command: uv run python manage.py runserver 0.0.0.0:8000
     volumes:
       - .:/app
+      - /app/.venv
       - media_data:/app/media
     ports:
       - "8000:8000"
+    environment:
+      UV_LINK_MODE: copy
     env_file: .env
     depends_on:
       db:
@@ -45,7 +48,10 @@ services:
     command: uv run celery -A config worker -l info --concurrency=2
     volumes:
       - .:/app
+      - /app/.venv
       - media_data:/app/media
+    environment:
+      UV_LINK_MODE: copy
     env_file: .env
     depends_on:
       db:
@@ -58,6 +64,9 @@ services:
   #   command: uv run celery -A config beat -l info
   #   volumes:
   #     - .:/app
+  #     - /app/.venv
+  #   environment:
+  #     UV_LINK_MODE: copy
   #   env_file: .env
   #   depends_on:
   #     db:

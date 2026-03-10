@@ -33,7 +33,8 @@
       "Read(//c/Users/Teto/Documents/sourcecodes/Spyder/ V2/apps/network_graph/**)",
       "Read(//c/Users/Teto/Documents/sourcecodes/Spyder/ V2/apps/network_graph/services/**)",
       "Bash(cd /c/Users/Teto/Documents/sourcecodes/\"Spyder V2\")",
-      "Bash(grep -n \"innerHTML\\\\|eval\\\\|dangerouslySetInnerHTML\" static/js/*.js)"
+      "Bash(grep -n \"innerHTML\\\\|eval\\\\|dangerouslySetInnerHTML\" static/js/*.js)",
+      "Bash(uv run python manage.py makemigrations network_graph --name add_node_email_field)"
     ]
   }
 }

@@ -32,6 +32,7 @@ class Node(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=255)
     node_type = models.CharField(max_length=10, choices=NodeType.choices, default=NodeType.PERSON)
+    email = models.EmailField(blank=True, null=True, unique=True, db_index=True)
     properties = models.JSONField(default=dict, blank=True)
     notes = models.TextField(blank=True, default="")
     summary = models.JSONField(default=dict, blank=True)
@@ -78,6 +79,11 @@ class Node(models.Model):
                         self.notes = "### Agenda\n-\n\n### Action Items\n- [ ] "
                     elif self.node_type == NodeType.PERSON:
                         self.notes = "### Context\n"
+
+        # Sync email field from properties for uniqueness enforcement
+        if self.node_type == NodeType.PERSON and isinstance(self.properties, dict):
+            email_val = str(self.properties.get("Email", "") or "").strip()
+            self.email = email_val if email_val else None
 
         super().save(*args, **kwargs)
 

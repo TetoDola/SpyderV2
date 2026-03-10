@@ -73,7 +73,7 @@ def _resolve_person(
     if email:
         match = Node.objects.filter(
             node_type="PERSON",
-            properties__Email=email,
+            email=email,
         ).first()
         if match:
             return ResolvedEntity(

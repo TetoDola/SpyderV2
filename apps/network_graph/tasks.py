@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 from django.utils import timezone
 
 from apps.network_graph.dsl import DSLContext
@@ -28,6 +29,8 @@ logger = logging.getLogger(__name__)
     default_retry_delay=10,
     autoretry_for=(Exception,),
     retry_backoff=True,
+    soft_time_limit=180,
+    time_limit=210,
 )
 def process_voice_note(self: object, ingestion_id: str) -> None:
     """Transcribe a voice note and chain to extraction."""
@@ -49,6 +52,9 @@ def process_voice_note(self: object, ingestion_id: str) -> None:
         # Chain to shared extraction
         extract_entities.delay(ingestion_id)
 
+    except SoftTimeLimitExceeded:
+        _mark_failed(ingestion, "TRANSCRIBING", TimeoutError("Task timed out"))
+        raise
     except Exception as e:
         _mark_failed(ingestion, "TRANSCRIBING", e)
         raise
@@ -58,6 +64,8 @@ def process_voice_note(self: object, ingestion_id: str) -> None:
     bind=True,
     max_retries=1,
     default_retry_delay=5,
+    soft_time_limit=60,
+    time_limit=90,
 )
 def process_document(self: object, ingestion_id: str) -> None:
     """Extract text from a document and chain to extraction."""
@@ -83,7 +91,7 @@ def process_document(self: object, ingestion_id: str) -> None:
         raise
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, soft_time_limit=60, time_limit=90)
 def process_freeform_note(self: object, ingestion_id: str) -> None:
     """Process a freeform note and chain to extraction."""
     ingestion = Ingestion.objects.get(pk=ingestion_id)
@@ -117,6 +125,8 @@ def process_freeform_note(self: object, ingestion_id: str) -> None:
     default_retry_delay=5,
     autoretry_for=(Exception,),
     retry_backoff=True,
+    soft_time_limit=120,
+    time_limit=150,
 )
 def extract_entities(self: object, ingestion_id: str) -> None:
     """Extract entities via LLM and chain to resolution."""
@@ -134,6 +144,9 @@ def extract_entities(self: object, ingestion_id: str) -> None:
 
         resolve_entities.delay(ingestion_id)
 
+    except SoftTimeLimitExceeded:
+        _mark_failed(ingestion, "EXTRACTING", TimeoutError("Task timed out"))
+        raise
     except Exception as e:
         _mark_failed(ingestion, "EXTRACTING", e)
         raise
@@ -148,6 +161,8 @@ def extract_entities(self: object, ingestion_id: str) -> None:
     bind=True,
     max_retries=1,
     default_retry_delay=5,
+    soft_time_limit=60,
+    time_limit=90,
 )
 def resolve_entities(self: object, ingestion_id: str) -> None:
     """Resolve extracted entities against existing graph nodes."""
@@ -216,6 +231,8 @@ def resolve_entities(self: object, ingestion_id: str) -> None:
     bind=True,
     max_retries=1,
     default_retry_delay=5,
+    soft_time_limit=60,
+    time_limit=90,
 )
 def write_graph(self: object, ingestion_id: str) -> None:
     """Write resolved entities to the graph via DSL."""
@@ -272,6 +289,8 @@ def write_graph(self: object, ingestion_id: str) -> None:
     default_retry_delay=10,
     autoretry_for=(Exception,),
     retry_backoff=True,
+    soft_time_limit=120,
+    time_limit=150,
 )
 def summarize(self: object, ingestion_id: str) -> None:
     """Run per-meeting, per-person, and per-company summaries."""
@@ -333,6 +352,9 @@ def summarize(self: object, ingestion_id: str) -> None:
         ingestion.save(update_fields=["status", "completed_at"])
         ctx.flush_to_ingestion()
 
+    except SoftTimeLimitExceeded:
+        _mark_failed(ingestion, "SUMMARIZING", TimeoutError("Task timed out"))
+        raise
     except Exception as e:
         _mark_failed(ingestion, "SUMMARIZING", e)
         raise

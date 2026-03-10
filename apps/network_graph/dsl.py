@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from apps.network_graph.models import (
     Connection,
@@ -53,13 +53,29 @@ def create_node(
     properties: dict[str, object] | None = None,
     is_ghost: bool = False,
 ) -> Node:
-    """Create a new node and log the command."""
-    node = Node.objects.create(
-        title=title,
-        node_type=node_type,
-        properties=properties or {},
-        is_ghost=is_ghost,
-    )
+    """Create a new node and log the command.
+
+    If a PERSON node with the same email already exists, returns the
+    existing node instead of creating a duplicate.
+    """
+    props = properties or {}
+    email = str(props.get("Email", "") or "").strip() if isinstance(props, dict) else ""
+
+    try:
+        node = Node.objects.create(
+            title=title,
+            node_type=node_type,
+            properties=props,
+            is_ghost=is_ghost,
+        )
+    except IntegrityError:
+        if node_type == "PERSON" and email:
+            existing = Node.objects.filter(email=email).first()
+            if existing:
+                logger.info("Duplicate email %s — returning existing node %s", email, existing.pk)
+                return existing
+        raise
+
     ctx._log(
         "CREATE_NODE",
         node_id=str(node.pk),
@@ -116,7 +132,7 @@ def update_profile(
     if node.is_ghost:
         node.is_ghost = False
 
-    node.save()
+    node.save()  # email synced automatically via Node.save()
 
     ctx._log(
         "UPDATE_PROFILE",

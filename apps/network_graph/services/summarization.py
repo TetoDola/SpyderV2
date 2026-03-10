@@ -211,6 +211,7 @@ def _call_anthropic(system_prompt: str, user_prompt: str) -> dict[str, object]:
         max_tokens=2048,
         system=system_prompt,
         messages=[{"role": "user", "content": user_prompt}],
+        timeout=60.0,
     )
 
     text = ""
@@ -238,6 +239,7 @@ def _call_openai(system_prompt: str, user_prompt: str) -> dict[str, object]:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
+        timeout=60.0,
     )
 
     content = response.choices[0].message.content or ""
@@ -271,6 +273,7 @@ def _call_openrouter(system_prompt: str, user_prompt: str) -> dict[str, object]:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
+        timeout=60.0,
     )
 
     content = response.choices[0].message.content or ""

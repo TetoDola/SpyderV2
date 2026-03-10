@@ -20,6 +20,73 @@ class ExtractionError(Exception):
     """Raised when entity extraction fails."""
 
 
+def validate_extraction_output(data: object) -> dict[str, object]:
+    """Validate that LLM extraction output matches the expected structure.
+
+    Raises ExtractionError with details if invalid. Returns normalized data.
+    """
+    if not isinstance(data, dict):
+        raise ExtractionError(f"Extraction output must be a dict, got {type(data).__name__}")
+
+    errors: list[str] = []
+
+    # people: list of dicts with at least "name"
+    people = data.get("people", [])
+    if not isinstance(people, list):
+        errors.append(f"'people' must be a list, got {type(people).__name__}")
+    else:
+        for i, person in enumerate(people):
+            if not isinstance(person, dict):
+                errors.append(f"people[{i}] must be a dict")
+            elif not person.get("name"):
+                errors.append(f"people[{i}] missing required 'name' field")
+
+    # companies: list of dicts with at least "name"
+    companies = data.get("companies", [])
+    if not isinstance(companies, list):
+        errors.append(f"'companies' must be a list, got {type(companies).__name__}")
+    else:
+        for i, company in enumerate(companies):
+            if not isinstance(company, dict):
+                errors.append(f"companies[{i}] must be a dict")
+            elif not company.get("name"):
+                errors.append(f"companies[{i}] missing required 'name' field")
+
+    # relationships: list of dicts with from_name, to_name, label
+    relationships = data.get("relationships", [])
+    if not isinstance(relationships, list):
+        errors.append(f"'relationships' must be a list, got {type(relationships).__name__}")
+    else:
+        for i, rel in enumerate(relationships):
+            if not isinstance(rel, dict):
+                errors.append(f"relationships[{i}] must be a dict")
+            else:
+                for key in ("from_name", "to_name", "label"):
+                    if not rel.get(key):
+                        errors.append(f"relationships[{i}] missing required '{key}'")
+
+    # meeting_context: dict or null
+    meeting_context = data.get("meeting_context")
+    if meeting_context is not None and not isinstance(meeting_context, dict):
+        errors.append(
+            f"'meeting_context' must be a dict or null, "
+            f"got {type(meeting_context).__name__}"
+        )
+
+    if errors:
+        raise ExtractionError(
+            "Extraction validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
+        )
+
+    # Normalize: ensure optional keys exist with defaults
+    data.setdefault("people", [])
+    data.setdefault("companies", [])
+    data.setdefault("relationships", [])
+    data.setdefault("meeting_context", None)
+
+    return data
+
+
 # Default extraction result when no entities are found
 EMPTY_EXTRACTION: dict[str, object] = {
     "people": [],
@@ -102,6 +169,7 @@ def _extract_anthropic(raw_text: str) -> dict[str, object]:
                 "content": f"Extract all entities from the following text:\n\n{raw_text}",
             }
         ],
+        timeout=60.0,
     )
 
     # Find the tool use block in the response
@@ -109,7 +177,7 @@ def _extract_anthropic(raw_text: str) -> dict[str, object]:
         if block.type == "tool_use" and block.name == "extract_entities":
             result = block.input
             if isinstance(result, dict):
-                return result
+                return validate_extraction_output(result)
 
     raise ExtractionError("No tool_use block found in Anthropic response")
 
@@ -139,6 +207,7 @@ def _extract_openai(raw_text: str) -> dict[str, object]:
                 ),
             },
         ],
+        timeout=60.0,
     )
 
     content = response.choices[0].message.content
@@ -153,7 +222,7 @@ def _extract_openai(raw_text: str) -> dict[str, object]:
     if not isinstance(result, dict):
         raise ExtractionError(f"Expected dict, got {type(result)}")
 
-    return result
+    return validate_extraction_output(result)
 
 
 def _extract_openrouter(raw_text: str) -> dict[str, object]:
@@ -192,6 +261,7 @@ def _extract_openrouter(raw_text: str) -> dict[str, object]:
                     ),
                 },
             ],
+            timeout=60.0,
         )
     except Exception as e:
         raise ExtractionError(f"OpenRouter API call failed: {e}") from e
@@ -233,4 +303,4 @@ def _extract_openrouter(raw_text: str) -> dict[str, object]:
     if not isinstance(result, dict):
         raise ExtractionError(f"Expected dict, got {type(result)}")
 
-    return result
+    return validate_extraction_output(result)
