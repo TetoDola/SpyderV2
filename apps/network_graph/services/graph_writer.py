@@ -172,8 +172,20 @@ def _create_relationship_edges(
         from_id = entity_map.get(from_name)
         to_id = entity_map.get(to_name)
 
-        if from_id and to_id and from_id != to_id:
-            connect(ctx, source_id=from_id, target_id=to_id, relationship_label=label)
+        # Log unresolvable names instead of silently skipping. This happens
+        # when extraction produces a relationship target that wasn't extracted
+        # as a person or company (e.g. "Swiss Engineering Leaders" is an event,
+        # not a resolved entity).
+        if not from_id:
+            logger.warning("Relationship skipped: from_name '%s' not found in resolved entities", from_name)
+            continue
+        if not to_id:
+            logger.warning("Relationship skipped: to_name '%s' not found in resolved entities", to_name)
+            continue
+        if from_id == to_id:
+            continue
+
+        connect(ctx, source_id=from_id, target_id=to_id, relationship_label=label)
 
 
 def _create_company_meeting_edges(

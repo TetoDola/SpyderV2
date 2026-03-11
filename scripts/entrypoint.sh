@@ -13,7 +13,11 @@ until redis-cli -u "${CELERY_BROKER_URL:-redis://redis:6379/0}" ping 2>/dev/null
 done
 echo "Redis is ready."
 
-echo "Running migrations..."
-uv run python manage.py migrate --noinput
+if echo "$@" | grep -q "celery"; then
+  echo "Celery worker — skipping migrations."
+else
+  echo "Running migrations..."
+  uv run python manage.py migrate --noinput
+fi
 
 exec "$@"

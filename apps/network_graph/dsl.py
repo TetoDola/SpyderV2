@@ -39,11 +39,30 @@ class DSLContext:
         logger.info("DSL %s: %s", command, entry)
 
     def flush_to_ingestion(self) -> None:
-        """Persist the command log to the Ingestion record."""
+        """Persist the command log to the Ingestion record (appends to existing commands).
+
+        BUG FIX (2026-03-11): dsl_commands audit log showed only UPDATE_PROFILE
+
+        What happened: After a meeting ingestion completed, inspecting
+        ingestion.dsl_commands showed only UPDATE_PROFILE commands from the
+        summarize step. All CREATE_NODE and CONNECT commands from the resolve
+        and write steps were missing, making it look like zero edges were created.
+
+        Root cause: The pipeline runs as 3 separate Celery tasks (resolve →
+        write → summarize), each creating its own DSLContext. This method
+        originally did:
+            Ingestion.objects.filter(pk=...).update(dsl_commands=self.commands)
+        This is a full replace — so each step's flush overwrote the previous
+        step's commands. The summarize step ran last, so only its UPDATE_PROFILE
+        commands survived.
+
+        Fix: Read existing commands first, then append this step's commands.
+        """
         if self.ingestion_id:
-            Ingestion.objects.filter(pk=self.ingestion_id).update(
-                dsl_commands=self.commands,
-            )
+            ingestion = Ingestion.objects.get(pk=self.ingestion_id)
+            existing = ingestion.dsl_commands if isinstance(ingestion.dsl_commands, list) else []
+            ingestion.dsl_commands = existing + self.commands
+            ingestion.save(update_fields=["dsl_commands"])
 
 
 def create_node(

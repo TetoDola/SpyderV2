@@ -34,7 +34,11 @@
       "Read(//c/Users/Teto/Documents/sourcecodes/Spyder/ V2/apps/network_graph/services/**)",
       "Bash(cd /c/Users/Teto/Documents/sourcecodes/\"Spyder V2\")",
       "Bash(grep -n \"innerHTML\\\\|eval\\\\|dangerouslySetInnerHTML\" static/js/*.js)",
-      "Bash(uv run python manage.py makemigrations network_graph --name add_node_email_field)"
+      "Bash(uv run python manage.py makemigrations network_graph --name add_node_email_field)",
+      "Bash(python3 -c \"from apps.network_graph.tasks import process_freeform_note; print\\(process_freeform_note\\); print\\(type\\(process_freeform_note\\)\\); print\\(hasattr\\(process_freeform_note, ''delay''\\)\\)\")",
+      "Bash(grep -E \"\\\\.py$|\\\\.txt$\")",
+      "Bash(docker-compose exec -T web uv run python -c \":*)",
+      "Bash(docker-compose exec -T web uv run python manage.py shell -c \":*)"
     ]
   }
 }

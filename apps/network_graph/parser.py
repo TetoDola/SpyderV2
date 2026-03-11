@@ -7,6 +7,7 @@ import re
 
 from apps.network_graph.dsl import DSLContext, connect, create_node
 from apps.network_graph.models import Connection, Node
+from apps.network_graph.schema import VALID_EDGE_TYPES
 
 # Two patterns:
 # 1. @[Complex Name (with parens, dots, etc.)] — bracket-delimited (from Obsidian import)
@@ -81,17 +82,35 @@ def sync_connections(node: Node, ctx: DSLContext | None = None) -> None:
         target = target_map[title]
         desired_edges.add((str(target.pk), label))
 
-    # Get existing outgoing connections for this node
+    # BUG FIX (2026-03-11): Pipeline edge deletion on node update
+    #
+    # What happened: After a meeting ingestion, the graph would show all nodes
+    # correctly connected (ATTENDED, WORKS_AT, KNOWS, DISCUSSED edges). But the
+    # moment a user edited ANY node (e.g. renaming "Meeting 1" to something else),
+    # ALL outgoing edges from that node would vanish, leaving it disconnected.
+    # Editing more nodes cascaded the damage until the entire graph was disconnected.
+    #
+    # Root cause: This function diffs "desired" edges (parsed from @mentions in
+    # notes/properties) against ALL existing outgoing edges, then deletes anything
+    # not in the desired set. But pipeline-created edges (ATTENDED, WORKS_AT, KNOWS,
+    # DISCUSSED) are NOT created via @mentions — they're created by the ingestion
+    # pipeline's graph_writer. So they never appear in the "desired" set, and every
+    # call to sync_connections would delete them as "stale."
+    #
+    # Fix: Skip edges whose relationship_label is in VALID_EDGE_TYPES. These are
+    # owned by the pipeline and must not be managed by the mention-based diff.
     existing = Connection.objects.filter(source=node).select_related("target")
     existing_edges: set[tuple[str, str]] = set()
     existing_map: dict[tuple[str, str], Connection] = {}
 
     for conn in existing:
+        if conn.relationship_label in VALID_EDGE_TYPES:
+            continue  # Pipeline-managed edge — don't touch
         key = (str(conn.target_id), conn.relationship_label)
         existing_edges.add(key)
         existing_map[key] = conn
 
-    # DELETE stale edges
+    # DELETE stale edges (only mention-managed ones)
     to_delete = existing_edges - desired_edges
     for edge_key in to_delete:
         existing_map[edge_key].delete()

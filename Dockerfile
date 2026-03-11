@@ -27,7 +27,7 @@ RUN chmod +x /app/scripts/entrypoint.sh
 
 # Collect static files (dummy key — DB not needed for collectstatic)
 RUN DJANGO_SECRET_KEY=build-only DB_HOST=localhost \
-    uv run python manage.py collectstatic --noinput || true
+    uv run python manage.py collectstatic --noinput
 
 EXPOSE 8000
 
