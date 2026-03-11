@@ -47,6 +47,41 @@ let currentPeekTab = "notes"; // "notes" | "summary"
 let currentNodeSummary = null; // cached summary data for current peek node
 let currentNodeType = "PERSON"; // cached node_type for current peek node
 
+// ── Node Type Filter ──────────────────────────────────
+const NODE_TYPE_DEFAULTS = {
+  PERSON: true,
+  COMPANY: true,
+  MEETING: false,
+};
+
+const NODE_TYPE_COLORS = {
+  PERSON: "#3b82f6",
+  COMPANY: "#22c55e",
+  MEETING: "#f59e0b",
+};
+
+// Filter panel open/closed state
+let filterPanelOpen = false;
+
+let visibleTypes = new Set();
+
+// Load from localStorage or apply defaults
+(function initVisibleTypes() {
+  const saved = localStorage.getItem("graphVisibleTypes");
+  if (saved) {
+    try {
+      const arr = JSON.parse(saved);
+      if (Array.isArray(arr) && arr.length > 0) {
+        visibleTypes = new Set(arr);
+        return;
+      }
+    } catch (_) { /* fall through to defaults */ }
+  }
+  for (const [type, on] of Object.entries(NODE_TYPE_DEFAULTS)) {
+    if (on) visibleTypes.add(type);
+  }
+})();
+
 // ── Marked.js config: enable single-line breaks ───────
 marked.use({ breaks: true });
 
@@ -61,6 +96,105 @@ function showToast(message, type = "info") {
     el.classList.add("toast-out");
     el.addEventListener("animationend", () => el.remove());
   }, 3000);
+}
+
+// ── Node Type Filter Panel ────────────────────────────
+const typeFilterPanel = document.getElementById("type-filter-panel");
+const typeFilterBar = document.getElementById("type-filter-bar");
+const typeFilterToggle = document.getElementById("type-filter-toggle");
+
+typeFilterToggle.addEventListener("click", () => {
+  filterPanelOpen = !filterPanelOpen;
+  typeFilterBar.classList.toggle("hidden", !filterPanelOpen);
+  typeFilterToggle.classList.toggle("text-white/60", filterPanelOpen);
+  typeFilterToggle.classList.toggle("text-white/35", !filterPanelOpen);
+});
+
+function buildTypeFilterBar() {
+  typeFilterBar.innerHTML = "";
+  const allNodes = originalGraphData.nodes;
+  const typeCounts = {};
+  for (const n of allNodes) {
+    const t = n.group || "UNKNOWN";
+    typeCounts[t] = (typeCounts[t] || 0) + 1;
+  }
+
+  // Ensure defaults appear even if count is 0
+  for (const t of Object.keys(NODE_TYPE_DEFAULTS)) {
+    if (!(t in typeCounts)) typeCounts[t] = 0;
+  }
+  // Ensure visibleTypes includes only known types; new types default to visible
+  for (const t of Object.keys(typeCounts)) {
+    if (!(t in NODE_TYPE_DEFAULTS) && !visibleTypes.has(t)) {
+      visibleTypes.add(t);
+    }
+  }
+
+  const sortedTypes = Object.keys(typeCounts).sort((a, b) => {
+    const order = Object.keys(NODE_TYPE_DEFAULTS);
+    const ai = order.indexOf(a);
+    const bi = order.indexOf(b);
+    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+  });
+
+  for (const type of sortedTypes) {
+    const count = typeCounts[type];
+    const isActive = visibleTypes.has(type);
+    const color = NODE_TYPE_COLORS[type] || "#888";
+    const btn = document.createElement("button");
+    btn.className = `type-toggle ${isActive ? "active" : "inactive"}${count === 0 ? " dimmed" : ""}`;
+    btn.dataset.nodeType = type;
+
+    const label = type.charAt(0) + type.slice(1).toLowerCase();
+    btn.innerHTML = `<span class="type-dot" style="background:${color}"></span>${label}<span class="type-count">${count}</span>`;
+
+    if (count > 0) {
+      btn.addEventListener("click", () => toggleNodeType(type));
+    }
+    typeFilterBar.appendChild(btn);
+  }
+}
+
+function toggleNodeType(type) {
+  if (visibleTypes.has(type)) {
+    // Prevent hiding the last visible type
+    if (visibleTypes.size <= 1) {
+      showToast("At least one node type must be visible.", "info");
+      return;
+    }
+    visibleTypes.delete(type);
+
+    // If peek modal is open for a node of this type, close it
+    if (currentNodeId && cachedGraphData) {
+      const peekNode = cachedGraphData.nodes.find((n) => n.id === currentNodeId);
+      if (peekNode && (peekNode.group || peekNode.node_type) === type) {
+        closePeek();
+      }
+    }
+  } else {
+    visibleTypes.add(type);
+  }
+
+  // Persist
+  localStorage.setItem("graphVisibleTypes", JSON.stringify([...visibleTypes]));
+
+  // Update button states
+  updateFilterButtons();
+
+  // Re-filter the graph
+  applySearchFilter();
+
+  if (currentView === "table") renderTable();
+}
+
+function updateFilterButtons() {
+  const buttons = typeFilterBar.querySelectorAll(".type-toggle");
+  for (const btn of buttons) {
+    const type = btn.dataset.nodeType;
+    const isActive = visibleTypes.has(type);
+    btn.classList.toggle("active", isActive);
+    btn.classList.toggle("inactive", !isActive);
+  }
 }
 
 // ── DOM refs ───────────────────────────────────────────
@@ -134,6 +268,7 @@ function switchView(view) {
   if (view === "graph") {
     canvas.classList.remove("hidden");
     tableView.classList.add("hidden");
+    typeFilterPanel.classList.remove("hidden");
     toggleGraphBtn.classList.add("bg-gray-600", "text-white");
     toggleGraphBtn.classList.remove("bg-transparent", "text-white/40");
     toggleTableBtn.classList.add("bg-transparent", "text-white/40");
@@ -143,6 +278,7 @@ function switchView(view) {
   } else {
     canvas.classList.add("hidden");
     tableView.classList.remove("hidden");
+    typeFilterPanel.classList.add("hidden");
     toggleTableBtn.classList.add("bg-gray-600", "text-white");
     toggleTableBtn.classList.remove("bg-transparent", "text-white/40");
     toggleGraphBtn.classList.add("bg-transparent", "text-white/40");
@@ -236,8 +372,8 @@ function renderTable() {
   }
   tableEmpty.classList.add("hidden");
 
-  // Filter ghosts if hidden, then sort alphabetically
-  let nodes = [...cachedGraphData.nodes];
+  // Filter by visible types and ghosts, then sort alphabetically
+  let nodes = cachedGraphData.nodes.filter((n) => visibleTypes.has(n.group || n.node_type || "UNKNOWN"));
   if (!showGhosts) nodes = nodes.filter((n) => !n.is_ghost);
   nodes.sort((a, b) => a.label.localeCompare(b.label));
 
@@ -397,6 +533,9 @@ async function loadGraph() {
     nodes: nodes.map((n) => ({ ...n })),
     links: links.map((l) => ({ ...l })),
   };
+
+  // Rebuild type filter toggles with updated counts
+  buildTypeFilterBar();
 
   if (graph) {
     applySearchFilter();
@@ -1271,8 +1410,8 @@ function applySearchFilter() {
   const query = searchInput.value.trim().toLowerCase();
   const hops = Math.max(0, Math.min(3, parseInt(hopInput.value, 10) || 0));
 
-  // Start from all nodes, optionally filtering ghosts
-  let pool = originalGraphData.nodes;
+  // Start from all nodes, filtering by visible types and ghosts
+  let pool = originalGraphData.nodes.filter((n) => visibleTypes.has(n.group || "UNKNOWN"));
   if (!showGhosts) {
     pool = pool.filter((n) => !n.is_ghost);
   }
