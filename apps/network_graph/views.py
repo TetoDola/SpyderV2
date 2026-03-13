@@ -69,9 +69,17 @@ def index(request: HttpRequest) -> HttpResponse:
 
 @require_GET
 def api_graph(request: HttpRequest) -> JsonResponse:
-    """Return full graph data for vis-network rendering."""
-    nodes = Node.objects.all()
-    edges = Connection.objects.select_related("source", "target").all()
+    """Return graph data for force-graph rendering.
+
+    MEETING nodes are excluded — meetings surface as metadata on KNOWS
+    edges and in the person summary tab instead of as standalone nodes.
+    """
+    nodes = Node.objects.exclude(node_type="MEETING")
+    node_ids = nodes.values_list("pk", flat=True)
+    edges = Connection.objects.select_related("source", "target").filter(
+        source_id__in=node_ids,
+        target_id__in=node_ids,
+    )
 
     node_data = [
         {
@@ -90,6 +98,7 @@ def api_graph(request: HttpRequest) -> JsonResponse:
             "from": str(e.source_id),
             "to": str(e.target_id),
             "label": e.relationship_label,
+            "metadata": e.metadata if isinstance(e.metadata, dict) else {},
         }
         for e in edges
     ]
@@ -99,21 +108,65 @@ def api_graph(request: HttpRequest) -> JsonResponse:
 
 @require_GET
 def api_node_detail(request: HttpRequest, node_id: str) -> JsonResponse:
-    """Return full details for a single node."""
+    """Return full details for a single node.
+
+    For PERSON nodes, includes aggregated interaction history from
+    all KNOWS edges (meeting metadata).
+    """
     node = get_object_or_404(Node, pk=node_id)
-    return JsonResponse(
-        {
-            "id": str(node.id),
-            "title": node.title,
-            "node_type": node.node_type,
-            "properties": node.properties,
-            "notes": node.notes,
-            "summary": node.summary,
-            "is_ghost": node.is_ghost,
-            "profile_image": node.profile_image.url if node.profile_image else None,
-            "created_at": node.created_at.isoformat(),
-        }
-    )
+
+    data: dict[str, object] = {
+        "id": str(node.id),
+        "title": node.title,
+        "node_type": node.node_type,
+        "properties": node.properties,
+        "notes": node.notes,
+        "summary": node.summary,
+        "is_ghost": node.is_ghost,
+        "profile_image": node.profile_image.url if node.profile_image else None,
+        "created_at": node.created_at.isoformat(),
+    }
+
+    # Aggregate interaction history from KNOWS edges for PERSON nodes
+    if node.node_type == "PERSON":
+        from django.db.models import Q
+
+        knows_edges = Connection.objects.filter(
+            Q(source_id=node_id) | Q(target_id=node_id),
+            relationship_label="KNOWS",
+        ).select_related("source", "target")
+
+        all_meetings: list[dict[str, str]] = []
+        for edge in knows_edges:
+            meta = edge.metadata if isinstance(edge.metadata, dict) else {}
+            meetings = meta.get("meetings", [])
+            if isinstance(meetings, list):
+                # Tag each meeting with who the other person is
+                other = edge.target if str(edge.source_id) == node_id else edge.source
+                for m in meetings:
+                    if isinstance(m, dict):
+                        all_meetings.append({
+                            "meeting_node_id": m.get("meeting_node_id", ""),
+                            "title": m.get("title", ""),
+                            "date": m.get("date", ""),
+                            "context": m.get("context", ""),
+                            "with_person": other.title,
+                            "with_person_id": str(other.pk),
+                        })
+
+        # Deduplicate by meeting_node_id and sort by date descending
+        seen_ids: set[str] = set()
+        unique_meetings: list[dict[str, str]] = []
+        for m in all_meetings:
+            mid = m.get("meeting_node_id", "")
+            if mid and mid not in seen_ids:
+                seen_ids.add(mid)
+                unique_meetings.append(m)
+        unique_meetings.sort(key=lambda m: m.get("date", ""), reverse=True)
+
+        data["interactions"] = unique_meetings
+
+    return JsonResponse(data)
 
 
 @csrf_exempt

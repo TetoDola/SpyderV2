@@ -78,9 +78,16 @@ def validate_extraction_output(data: object) -> dict[str, object]:
             "Extraction validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
         )
 
+    # products: optional list of dicts (informational, not graph nodes)
+    products = data.get("products", [])
+    if not isinstance(products, list):
+        # Non-fatal: coerce to empty list
+        data["products"] = []
+
     # Normalize: ensure optional keys exist with defaults
     data.setdefault("people", [])
     data.setdefault("companies", [])
+    data.setdefault("products", [])
     data.setdefault("relationships", [])
     data.setdefault("meeting_context", None)
 
@@ -91,26 +98,109 @@ def validate_extraction_output(data: object) -> dict[str, object]:
 EMPTY_EXTRACTION: dict[str, object] = {
     "people": [],
     "companies": [],
+    "products": [],
     "relationships": [],
     "meeting_context": {
         "date": None,
         "key_points": [],
         "decisions": [],
+        "follow_ups": [],
     },
 }
 
-EXTRACTION_SYSTEM_PROMPT = """You are an entity extraction engine for a personal CRM.
-Given a transcript, document, or note, extract structured data.
+EXTRACTION_SYSTEM_PROMPT = """\
+You are an entity extraction engine for a personal CRM that maps professional relationships.
 
-Rules:
-- Extract ALL people mentioned by name. Include email, company, and job title if stated.
-- Extract ALL companies mentioned. Include website and industry if stated.
-- Extract relationships between entities (who knows whom, who works where, who attended what).
-- For relationship labels, use one of: KNOWS, WORKS_AT, ATTENDED, DISCUSSED.
-- Extract meeting context: date (ISO 8601 if possible), key discussion points, and decisions made.
-- Only extract what is explicitly stated or clearly implied. Do not hallucinate.
-- If a field is not mentioned, use null.
-- Return valid JSON matching the provided schema exactly.
+Your job: Given notes from a meeting or interaction, extract the PEOPLE, COMPANIES, and RELATIONSHIPS that are relevant to the user's professional network.
+
+CRITICAL DISTINCTION — Companies vs Products/Tools:
+- COMPANY = An organization where someone WORKS, INVESTS, FOUNDED, or has a direct professional relationship with. These become nodes in the relationship graph.
+- PRODUCT/TOOL = Software, platforms, services, or technologies being discussed, evaluated, or used. These do NOT become company nodes.
+
+Examples:
+- "Sarah works at Stripe" → Stripe is a COMPANY (someone works there)
+- "We're evaluating Auth0 vs Clerk for authentication" → Auth0 and Clerk are PRODUCTS, not companies
+- "André runs CarbonPath" → CarbonPath is a COMPANY (someone founded/runs it)
+- "They're migrating to Snowflake" → Snowflake is a PRODUCT (tool being adopted)
+- "Nadia's fund Equinox Ventures led the round" → Equinox Ventures is a COMPANY (investor with a relationship)
+- "We use Grafana Cloud for monitoring" → Grafana Cloud is a PRODUCT
+- "She left Datadog to join Nextera" → Datadog AND Nextera are COMPANIES (someone worked/works there)
+
+Rule of thumb: If a person WORKS AT, FOUNDED, INVESTED IN, or has a professional role at the organization → COMPANY. If it's a tool, product, or vendor being used/evaluated → PRODUCT.
+
+PEOPLE EXTRACTION RULES:
+- Extract every person mentioned by name.
+- Include email, company, and job title ONLY if explicitly stated. Use null otherwise.
+- The person writing these notes is the "user" — do not extract them as a person.
+
+COMPANY EXTRACTION RULES:
+- Only extract companies where someone has a professional role (works at, founded, invests through, advises).
+- Do NOT extract products, tools, platforms, or technologies as companies.
+- Include website and industry only if explicitly stated.
+
+RELATIONSHIP EXTRACTION RULES:
+Use the most specific label that fits. Fall back to ASSOCIATED_WITH only if nothing else applies.
+
+Person → Company:
+- WORKS_AT: Person currently has a role at a company ("Sarah is CTO at Acme").
+- WORKED_AT: Person previously worked there ("she left Datadog to join Nextera" → WORKED_AT Datadog).
+- FOUNDED: Person created or co-founded the company ("André runs CarbonPath" / "co-founder of").
+- INVESTED_IN: Person or company invested in a company ("Nadia's fund led the round").
+
+Person → Person:
+- KNOWS: Two people have a direct professional connection described in the notes. Do NOT connect everyone who appears in the same document — only people explicitly described as knowing each other.
+- REPORTS_TO: Direct management relationship ("she reports to Marcus", "Marcus manages the team").
+- RELATED_TO: Family or personal relationship ("his brother", "married to").
+
+Company → Company:
+- PARTNERED_WITH: Active business partnership between two companies.
+- ACQUIRED: One company acquired or merged with another.
+
+Fallback:
+- ASSOCIATED_WITH: A relationship that clearly exists but doesn't fit any category above.
+
+Do NOT create relationships between the user and extracted people (the system handles this separately).
+
+PRODUCT/TOOL EXTRACTION:
+- Extract products, tools, platforms, and technologies mentioned. Include context for how they're being used or evaluated.
+
+MEETING CONTEXT RULES:
+- date: YYYY-MM-DD if mentioned, null if not.
+- key_points: 3-10 bullet points of the most important things discussed. Be specific, use names.
+- decisions: Specific decisions that were made (not discussion topics).
+- follow_ups: Action items with who is responsible and any deadlines mentioned.
+
+Return ONLY valid JSON matching the exact schema provided. No markdown, no preamble.
+
+EXAMPLE OUTPUT:
+
+{
+  "people": [
+    {"name": "Sarah Chen", "email": "sarah@acme.com", "company": "Acme Corp", "title": "CTO"},
+    {"name": "James Park", "email": null, "company": "Acme Corp", "title": null}
+  ],
+  "companies": [
+    {"name": "Acme Corp", "website": null, "industry": "Technology"}
+  ],
+  "products": [
+    {"name": "Temporal", "context": "Using for workflow orchestration"},
+    {"name": "Auth0", "context": "Evaluated for authentication, rejected due to pricing"}
+  ],
+  "relationships": [
+    {"from_name": "Sarah Chen", "to_name": "Acme Corp", "label": "WORKS_AT"},
+    {"from_name": "Sarah Chen", "to_name": "Previous Corp", "label": "WORKED_AT"},
+    {"from_name": "Sarah Chen", "to_name": "James Park", "label": "KNOWS"},
+    {"from_name": "James Park", "to_name": "Sarah Chen", "label": "REPORTS_TO"}
+  ],
+  "meeting_context": {
+    "date": "2025-03-09",
+    "key_points": ["Sarah promoted to CTO at Acme Corp last month", "Acme evaluating Clerk for enterprise auth"],
+    "decisions": ["Two-week POC with Clerk, Auth0 as fallback"],
+    "follow_ups": ["Sarah sends API docs by Friday", "User intros James to recruiter contact"]
+  }
+}
+
+NOW EXTRACT FROM THE FOLLOWING TEXT:
 """
 
 
@@ -166,7 +256,7 @@ def _extract_anthropic(raw_text: str) -> dict[str, object]:
         messages=[
             {
                 "role": "user",
-                "content": f"Extract all entities from the following text:\n\n{raw_text}",
+                "content": raw_text,
             }
         ],
         timeout=60.0,

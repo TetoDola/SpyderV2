@@ -46,18 +46,17 @@ let showGhosts = true;
 let currentPeekTab = "notes"; // "notes" | "summary"
 let currentNodeSummary = null; // cached summary data for current peek node
 let currentNodeType = "PERSON"; // cached node_type for current peek node
+let currentNodeInteractions = []; // aggregated meeting history for PERSON nodes
 
 // ── Node Type Filter ──────────────────────────────────
 const NODE_TYPE_DEFAULTS = {
   PERSON: true,
   COMPANY: true,
-  MEETING: false,
 };
 
 const NODE_TYPE_COLORS = {
-  PERSON: "#3b82f6",
-  COMPANY: "#22c55e",
-  MEETING: "#f59e0b",
+  PERSON: "#6366f1",
+  COMPANY: "#10b981",
 };
 
 // Filter panel open/closed state
@@ -452,19 +451,44 @@ toggleTableBtn.addEventListener("click", () => switchView("table"));
 
 // ── force-graph rendering ──────────────────────────────
 const NODE_MIN_RADIUS = 1.5;
-const NODE_SCALE_FACTOR = 0.5;
-const GHOST_COLOR = "#666666";
-const LIVE_COLOR = "#999999";
-const LABEL_FONT_SIZE = 3; // base font size in px (smaller for readability)
-const LABEL_COLOR = "#AAAAAA"; // soft grey default
-const LABEL_COLOR_GHOST = "#555555";
-const LABEL_COLOR_HOVER = "#FFFFFF"; // bright white on hover
-const TEXT_THRESHOLD = 2.0; // zoom level: below = only high-degree labels
-const LABEL_ALWAYS_SHOW_DEGREE = 5; // always show labels for nodes with this many+ connections
+const NODE_SCALE_FACTOR = 0.3;
+const GHOST_COLOR = "#555555";
 const BG_COLOR = "#191919";
 
-function nodeRadius(degree) {
-  return NODE_MIN_RADIUS + Math.sqrt(degree || 0) * NODE_SCALE_FACTOR;
+const LABEL_FONT_SIZE = 3;
+const LABEL_COLOR_GHOST = "#555555";
+const LABEL_COLOR_HOVER = "#FFFFFF";
+const TEXT_THRESHOLD = 2.0;
+const LABEL_ALWAYS_SHOW_DEGREE = 3; // lowered: show labels for nodes with 3+ connections
+
+// ── Visual hierarchy: colors & sizes by node type ──
+const NODE_COLORS = {
+  PERSON:  "#6366f1",  // Indigo
+  COMPANY: "#10b981",  // Emerald
+  MEETING: "#6b7280",  // Grey
+};
+
+const NODE_STROKE_COLORS = {
+  PERSON:  "#818cf8",  // Lighter indigo
+  COMPANY: "#34d399",  // Lighter emerald
+  MEETING: "#9ca3af",  // Lighter grey
+};
+
+const NODE_LABEL_COLORS = {
+  PERSON:  "#c7d2fe",  // Light indigo
+  COMPANY: "#6ee7b7",  // Light emerald
+  MEETING: "#d1d5db",  // Light grey
+};
+
+const NODE_TYPE_RADIUS = {
+  PERSON:  5,
+  COMPANY: 4,
+  MEETING: 2.5,
+};
+
+function nodeRadius(degree, nodeType) {
+  const base = NODE_TYPE_RADIUS[nodeType] || 3;
+  return base + Math.sqrt(degree || 0) * NODE_SCALE_FACTOR;
 }
 
 // Focus/highlight state
@@ -515,6 +539,7 @@ async function loadGraph() {
     source: e.from,
     target: e.to,
     label: e.label || "",
+    metadata: e.metadata || {},
   }));
 
   // Compute degree (number of connections) for each node
@@ -525,7 +550,7 @@ async function loadGraph() {
   }
   for (const node of nodes) {
     node.degree = degreeMap[node.id] || 0;
-    node._radius = nodeRadius(node.degree);
+    node._radius = nodeRadius(node.degree, node.group);
   }
 
   // Store untouched copy for search filtering (plain ID strings, not object refs)
@@ -631,56 +656,96 @@ async function loadGraph() {
       const isFocusMode = hoveredNode !== null;
       const isHighlighted = !isFocusMode || focusedNeighbors.has(node.id);
       const isHovered = hoveredNode && hoveredNode.id === node.id;
-      const alpha = isFocusMode ? (isHighlighted ? 1.0 : 0.08) : 1.0;
+      const alpha = isFocusMode ? (isHighlighted ? 1.0 : 0.1) : 1.0;
+      const nodeType = node.group || "MEETING";
+
+      // ── Type-based colors ──
+      const fillColor = node.is_ghost ? GHOST_COLOR : (NODE_COLORS[nodeType] || "#6b7280");
+      const strokeColor = node.is_ghost ? "#444" : (NODE_STROKE_COLORS[nodeType] || "#9ca3af");
+
+      // ── Hover glow effect ──
+      if (isHovered) {
+        ctx.save();
+        ctx.shadowColor = fillColor;
+        ctx.shadowBlur = 15;
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, r * 1.15, 0, 2 * Math.PI);
+        ctx.fillStyle = fillColor;
+        ctx.globalAlpha = 0.35;
+        ctx.fill();
+        ctx.restore();
+      }
 
       // ── Draw node circle ──
-      const baseColor = node.is_ghost ? GHOST_COLOR : LIVE_COLOR;
       ctx.beginPath();
       ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
-      ctx.fillStyle = baseColor;
+      ctx.fillStyle = fillColor;
       ctx.globalAlpha = alpha;
       ctx.fill();
+
+      // ── Stroke for definition ──
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = 0.4;
+      ctx.globalAlpha = alpha * 0.5;
+      ctx.stroke();
 
       // ── Determine if this node's label should render ──
       const isOrphan = (node.degree || 0) === 0;
       const isHighDegree = (node.degree || 0) >= LABEL_ALWAYS_SHOW_DEGREE;
+      const isCompany = nodeType === "COMPANY";
       const zoomedIn = globalScale >= TEXT_THRESHOLD;
 
-      // Rule: hovered node ALWAYS shows its label (drawn last, below)
-      // Rule: orphan labels hidden unless hovered
-      // Rule: when zoomed out, only high-degree nodes show labels
       let shouldAttemptLabel = false;
       if (isHovered) {
         shouldAttemptLabel = true;
+      } else if (isFocusMode && isHighlighted) {
+        shouldAttemptLabel = true; // always label neighbors of hovered node
       } else if (isOrphan) {
         shouldAttemptLabel = false;
+      } else if (isCompany) {
+        shouldAttemptLabel = true; // companies are cluster anchors, always labeled
       } else if (zoomedIn) {
-        shouldAttemptLabel = true; // zoomed in: show all (subject to culling)
+        shouldAttemptLabel = true;
       } else if (isHighDegree) {
-        shouldAttemptLabel = true; // zoomed out but high-degree
+        shouldAttemptLabel = true;
       }
 
       if (shouldAttemptLabel && node.label) {
-        const fontSize = LABEL_FONT_SIZE + (node.degree > 3 ? 0.5 : 0);
-        ctx.font = `${fontSize}px Inter, system-ui, sans-serif`;
+        const isCompanyLabel = isCompany && !node.is_ghost;
+        const fontSize = isCompanyLabel
+          ? LABEL_FONT_SIZE - 0.3
+          : LABEL_FONT_SIZE + (node.degree > 3 ? 0.5 : 0);
+        const fontWeight = isCompanyLabel ? "600" : "500";
+        ctx.font = `${fontWeight} ${fontSize}px Inter, system-ui, sans-serif`;
+        const displayLabel = isCompanyLabel ? node.label.toUpperCase() : node.label;
+
+        // Label color: type-based when not ghost
+        const labelColor = node.is_ghost
+          ? LABEL_COLOR_GHOST
+          : (isHovered ? LABEL_COLOR_HOVER : (NODE_LABEL_COLORS[nodeType] || "#e5e7eb"));
 
         if (isHovered) {
-          // Hover: always draw on top, bright white, full opacity
           ctx.textAlign = "center";
           ctx.textBaseline = "top";
-          ctx.fillStyle = LABEL_COLOR_HOVER;
+          // Text shadow for readability
+          ctx.fillStyle = "rgba(0,0,0,0.8)";
           ctx.globalAlpha = 1.0;
-          ctx.fillText(node.label, node.x, node.y + r + 2);
+          ctx.fillText(displayLabel, node.x + 0.3, node.y + r + 2.3);
+          ctx.fillStyle = labelColor;
+          ctx.fillText(displayLabel, node.x, node.y + r + 2);
         } else {
-          // Attempt bounding-box culling
           const box = predictLabelBox(node, ctx, fontSize);
           const allNodes = graph.graphData().nodes;
           if (box && tryRegisterLabel(box, allNodes, node.id)) {
             ctx.textAlign = "center";
             ctx.textBaseline = "top";
-            ctx.fillStyle = node.is_ghost ? LABEL_COLOR_GHOST : LABEL_COLOR;
-            ctx.globalAlpha = alpha * (isFocusMode && isHighlighted ? 1.0 : 0.8);
-            ctx.fillText(node.label, node.x, node.y + r + 2);
+            const labelAlpha = alpha * (isFocusMode && isHighlighted ? 1.0 : 0.8);
+            // Text shadow
+            ctx.fillStyle = "rgba(0,0,0,0.7)";
+            ctx.globalAlpha = labelAlpha;
+            ctx.fillText(displayLabel, node.x + 0.3, node.y + r + 2.3);
+            ctx.fillStyle = labelColor;
+            ctx.fillText(displayLabel, node.x, node.y + r + 2);
           }
         }
       }
@@ -695,28 +760,60 @@ async function loadGraph() {
       ctx.fill();
     })
     .linkColor((link) => {
-      if (hoveredNode === null) return "rgba(255,255,255,0.15)";
-      return isLinkFocused(link) ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.03)";
+      const label = link.label || "";
+      // Base opacity when no node is hovered
+      if (hoveredNode === null) {
+        if (label === "WORKS_AT" || label === "FOUNDED")   return "rgba(16, 185, 129, 0.15)";
+        if (label === "WORKED_AT")                         return "rgba(16, 185, 129, 0.08)";
+        if (label === "INVESTED_IN")                       return "rgba(20, 184, 166, 0.12)";
+        if (label === "PARTNERED_WITH")                    return "rgba(245, 158, 11, 0.12)";
+        if (label === "ACQUIRED")                          return "rgba(249, 115, 22, 0.12)";
+        return "rgba(255, 255, 255, 0.12)";
+      }
+      // Focused edge (direct neighbour of hovered node)
+      if (isLinkFocused(link)) {
+        if (label === "WORKS_AT")     return "rgba(52, 211, 153, 0.85)";
+        if (label === "FOUNDED")      return "rgba(16, 185, 129, 0.9)";
+        if (label === "WORKED_AT")    return "rgba(110, 231, 183, 0.6)";
+        if (label === "INVESTED_IN")  return "rgba(45, 212, 191, 0.8)";
+        if (label === "KNOWS")        return "rgba(129, 140, 248, 0.75)";
+        if (label === "REPORTS_TO")   return "rgba(167, 139, 250, 0.75)";
+        if (label === "RELATED_TO")   return "rgba(244, 114, 182, 0.75)";
+        if (label === "PARTNERED_WITH") return "rgba(251, 191, 36, 0.8)";
+        if (label === "ACQUIRED")     return "rgba(251, 146, 60, 0.8)";
+        return "rgba(255, 255, 255, 0.7)";
+      }
+      return "rgba(255, 255, 255, 0.03)";
     })
     .linkWidth((link) => {
-      if (hoveredNode !== null && isLinkFocused(link)) return 1.5;
-      return 0.75;
+      if (hoveredNode !== null && isLinkFocused(link)) {
+        // Thicker for stronger relationships
+        const count = (link.metadata && link.metadata.interaction_count) || 1;
+        return Math.min(1 + (count - 1) * 0.4, 3);
+      }
+      // Base width also scales subtly by interaction count
+      const count = (link.metadata && link.metadata.interaction_count) || 1;
+      return Math.min(0.5 + (count - 1) * 0.2, 1.5);
     })
     .linkCanvasObjectMode(() => "after")
     .linkCanvasObject((link, ctx, globalScale) => {
+      // Edge labels hidden by default — only show on focused edges when hovering a node
       if (!link.label) return;
-      // Only show link labels when zoomed in and link is focused (or no focus)
-      if (globalScale < 1.5) return;
-      if (hoveredNode !== null && !isLinkFocused(link)) return;
+      if (hoveredNode === null) return;        // no hover = no labels
+      if (!isLinkFocused(link)) return;         // only show on direct edges
 
       const mid = {
         x: (link.source.x + link.target.x) / 2,
         y: (link.source.y + link.target.y) / 2,
       };
-      ctx.font = "2.5px Inter, system-ui, sans-serif";
+      ctx.font = "500 2.2px Inter, system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillStyle = hoveredNode ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.2)";
+      // Dark shadow for readability
+      ctx.fillStyle = "rgba(0,0,0,0.7)";
+      ctx.fillText(link.label, mid.x + 0.2, mid.y + 0.2);
+      // Label in a muted color
+      ctx.fillStyle = "rgba(255,255,255,0.55)";
       ctx.fillText(link.label, mid.x, mid.y);
     })
     .d3AlphaDecay(0.015)
@@ -737,26 +834,110 @@ async function loadGraph() {
     .onNodeDragEnd((node) => {
       node.fx = undefined;
       node.fy = undefined;
+    })
+    .onLinkClick((link) => {
+      if (link.label === "KNOWS" && link.metadata) {
+        showEdgeTooltip(link);
+      }
+    })
+    .onLinkHover((link) => {
+      canvas.style.cursor = link && link.label === "KNOWS" && link.metadata ? "pointer" : "default";
     });
 
-  // ── D3 force tuning: Obsidian-style — pull everything into one mass ──
-  graph.d3Force("charge").strength(-50).distanceMax(200);
-  graph.d3Force("link").distance(30).strength(0.8);
-  graph.d3Force("center", null); // remove default center force
-  graph.d3Force("gravity-x", d3.forceX().strength(0.15));
-  graph.d3Force("gravity-y", d3.forceY().strength(0.15));
+  // ── D3 force tuning: spacious layout with type-aware distances ──
+  graph.d3Force("charge").strength(-200).distanceMax(400);
+  graph.d3Force("link")
+    .distance((link) => {
+      const label = link.label || "";
+      if (label === "WORKS_AT")       return 120;  // companies orbit outside people clusters
+      if (label === "WORKED_AT")      return 140;  // past employers — further out
+      if (label === "FOUNDED")        return 110;  // founders close to their company
+      if (label === "INVESTED_IN")    return 150;  // investors — loose connection
+      if (label === "KNOWS")          return 60;   // people cluster together
+      if (label === "REPORTS_TO")     return 50;   // tight management chain
+      if (label === "RELATED_TO")     return 45;   // personal — very close
+      if (label === "PARTNERED_WITH") return 100;  // company peers
+      if (label === "ACQUIRED")       return 80;   // acquired = merged close
+      return 80;
+    })
+    .strength(0.3);  // weaker pull so repulsion can spread nodes
+  graph.d3Force("center", null);
+  graph.d3Force("gravity-x", d3.forceX().strength(0.05));
+  graph.d3Force("gravity-y", d3.forceY().strength(0.05));
   graph.d3Force("collide", d3.forceCollide((node) => {
-    // Gentle label-aware collision: just enough to prevent overlap, not spread apart
     const r = node._radius || NODE_MIN_RADIUS;
-    const labelExtra = node.label ? node.label.length * 0.4 : 0;
-    return r + labelExtra + 1;
-  }).strength(0.3).iterations(2));
+    return r + 8;  // generous padding to prevent overlap
+  }).strength(0.8).iterations(3));
 
   window.addEventListener("resize", () => {
     if (graph && currentView === "graph") {
       graph.width(window.innerWidth).height(window.innerHeight);
     }
   });
+}
+
+// ── Edge Tooltip (KNOWS interaction history) ─────────────
+let edgeTooltipEl = null;
+
+function showEdgeTooltip(link) {
+  const meta = link.metadata || {};
+  const meetings = meta.meetings || [];
+  const srcLabel = typeof link.source === "object" ? link.source.label : link.source;
+  const tgtLabel = typeof link.target === "object" ? link.target.label : link.target;
+
+  if (!edgeTooltipEl) {
+    edgeTooltipEl = document.createElement("div");
+    edgeTooltipEl.id = "edge-tooltip";
+    edgeTooltipEl.className = "edge-tooltip";
+    document.body.appendChild(edgeTooltipEl);
+
+    // Close on outside click
+    document.addEventListener("click", (e) => {
+      if (edgeTooltipEl && !edgeTooltipEl.contains(e.target)) {
+        hideEdgeTooltip();
+      }
+    });
+  }
+
+  const count = meta.interaction_count || meetings.length || 0;
+  const firstMet = meta.first_met || "";
+  const lastInteraction = meta.last_interaction || "";
+
+  let html = `<div class="edge-tooltip-header">${escapeHtml(srcLabel)} \u2194 ${escapeHtml(tgtLabel)}</div>`;
+  html += `<div class="edge-tooltip-meta">${count} interaction${count !== 1 ? "s" : ""}`;
+  if (firstMet) html += ` \u00b7 First met: ${escapeHtml(firstMet)}`;
+  if (lastInteraction && lastInteraction !== firstMet) html += ` \u00b7 Last: ${escapeHtml(lastInteraction)}`;
+  html += `</div>`;
+
+  if (meetings.length > 0) {
+    html += `<ul class="edge-tooltip-meetings">`;
+    // Show most recent first (up to 5)
+    const sorted = [...meetings].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    for (const m of sorted.slice(0, 5)) {
+      const dateStr = m.date ? `<span class="edge-tooltip-date">${escapeHtml(m.date)}</span>` : "";
+      html += `<li>${dateStr} ${escapeHtml(m.title || "Untitled")}`;
+      if (m.context) html += `<br><span class="edge-tooltip-context">${escapeHtml(m.context)}</span>`;
+      html += `</li>`;
+    }
+    if (sorted.length > 5) {
+      html += `<li class="edge-tooltip-more">+${sorted.length - 5} more</li>`;
+    }
+    html += `</ul>`;
+  }
+
+  edgeTooltipEl.innerHTML = html;
+  edgeTooltipEl.classList.remove("hidden");
+
+  // Position at center of screen
+  edgeTooltipEl.style.left = "50%";
+  edgeTooltipEl.style.top = "50%";
+  edgeTooltipEl.style.transform = "translate(-50%, -50%)";
+}
+
+function hideEdgeTooltip() {
+  if (edgeTooltipEl) {
+    edgeTooltipEl.classList.add("hidden");
+  }
 }
 
 // ── Center Peek Modal ──────────────────────────────────
@@ -790,12 +971,13 @@ async function openPeek(nodeId) {
   switchNotesMode("edit");
   renderProperties(node.properties || {});
 
-  // Store summary for the summary tab
+  // Store summary and interaction data for the summary tab
   currentNodeSummary = node.summary || null;
   currentNodeType = node.node_type || "PERSON";
+  currentNodeInteractions = node.interactions || [];
 
-  // Default to Summary tab if summary exists, Notes if not
-  const hasSummary = currentNodeSummary && Object.keys(currentNodeSummary).length > 0;
+  // Default to Summary tab if summary or interactions exist, Notes if not
+  const hasSummary = (currentNodeSummary && Object.keys(currentNodeSummary).length > 0) || currentNodeInteractions.length > 0;
   switchPeekTab(hasSummary ? "summary" : "notes");
 
   // Show delete button in edit mode
@@ -826,6 +1008,7 @@ function openPeekCreate() {
   // Reset summary state for create mode
   currentNodeSummary = null;
   currentNodeType = "PERSON";
+  currentNodeInteractions = [];
   switchPeekTab("notes");
 
   // Hide delete button in create mode
@@ -1472,6 +1655,7 @@ function applySearchFilter() {
       source: typeof l.source === "object" ? l.source.id : l.source,
       target: typeof l.target === "object" ? l.target.id : l.target,
       label: l.label,
+      metadata: l.metadata || {},
     }));
 
   graph.graphData({ nodes: filteredNodes, links: filteredLinks });
@@ -1527,7 +1711,10 @@ function switchPeekTab(tab) {
 }
 
 function renderSummary() {
-  if (!currentNodeSummary || Object.keys(currentNodeSummary).length === 0) {
+  const hasSummary = currentNodeSummary && Object.keys(currentNodeSummary).length > 0;
+  const hasInteractions = currentNodeInteractions && currentNodeInteractions.length > 0;
+
+  if (!hasSummary && !hasInteractions) {
     peekSummaryContent.classList.add("hidden");
     peekSummaryEmpty.classList.remove("hidden");
     return;
@@ -1535,7 +1722,7 @@ function renderSummary() {
   peekSummaryContent.classList.remove("hidden");
   peekSummaryEmpty.classList.add("hidden");
 
-  const s = currentNodeSummary;
+  const s = currentNodeSummary || {};
   let html = "";
 
   if (currentNodeType === "PERSON") {
@@ -1545,6 +1732,11 @@ function renderSummary() {
     if (s.follow_ups_involving_them && s.follow_ups_involving_them.length) html += summaryField("Open follow-ups", bulletList(s.follow_ups_involving_them));
     if (s.last_interaction) html += summaryField("Last interaction", escapeHtml(s.last_interaction));
     if (s.interaction_count != null) html += summaryField("Total interactions", String(s.interaction_count));
+
+    // Interaction timeline from KNOWS edges
+    if (hasInteractions) {
+      html += renderInteractionTimeline(currentNodeInteractions);
+    }
   } else if (currentNodeType === "COMPANY") {
     if (s.relationship_health) {
       const cls = s.relationship_health === "strong" ? "health-strong" : s.relationship_health === "moderate" ? "health-moderate" : "health-weak";
@@ -1562,6 +1754,27 @@ function renderSummary() {
   }
 
   peekSummaryContent.innerHTML = html || '<p class="text-white/20 text-sm">No summary data available.</p>';
+}
+
+function renderInteractionTimeline(interactions) {
+  const INITIAL_SHOW = 5;
+  const total = interactions.length;
+  const visible = interactions.slice(0, INITIAL_SHOW);
+
+  let html = `<div class="summary-field"><div class="summary-field-label">Recent Interactions</div><div class="summary-field-value">`;
+  html += `<div class="interaction-timeline">`;
+  for (const m of visible) {
+    const dateStr = m.date ? `<span class="interaction-date">${escapeHtml(m.date)}</span>` : "";
+    html += `<div class="interaction-item">`;
+    html += `${dateStr}<span class="interaction-title">${escapeHtml(m.title || "Untitled")}</span>`;
+    if (m.context) html += `<div class="interaction-context">${escapeHtml(m.context)}</div>`;
+    html += `</div>`;
+  }
+  if (total > INITIAL_SHOW) {
+    html += `<div class="interaction-more">Show all ${total} interactions</div>`;
+  }
+  html += `</div></div></div>`;
+  return html;
 }
 
 function summaryField(label, value) {

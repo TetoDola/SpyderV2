@@ -11,8 +11,8 @@
   flex-shrink: 0;
 }
 
-.badge-PERSON  { background: #3b82f6; color: #fff; }
-.badge-COMPANY { background: #22c55e; color: #fff; }
+.badge-PERSON  { background: #6366f1; color: #fff; }
+.badge-COMPANY { background: #10b981; color: #fff; }
 .badge-MEETING { background: #f59e0b; color: #fff; }
 
 /* Property rows */
@@ -534,6 +534,92 @@
 .dropzone-active {
   border-color: rgba(59, 130, 246, 0.5) !important;
   background: rgba(59, 130, 246, 0.05);
+}
+
+/* ═══ Edge Tooltip (KNOWS interaction history) ═══ */
+.edge-tooltip {
+  position: fixed;
+  z-index: 9999;
+  background: #1e1e1e;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 16px 20px;
+  min-width: 280px;
+  max-width: 380px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  color: #fff;
+}
+.edge-tooltip.hidden { display: none; }
+
+.edge-tooltip-header {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: rgba(255, 255, 255, 0.9);
+}
+.edge-tooltip-meta {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  margin-bottom: 10px;
+}
+.edge-tooltip-meetings {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.edge-tooltip-meetings li {
+  padding: 6px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+}
+.edge-tooltip-date {
+  color: rgba(255, 255, 255, 0.4);
+  margin-right: 6px;
+  font-size: 11px;
+}
+.edge-tooltip-context {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 11px;
+}
+.edge-tooltip-more {
+  color: rgba(255, 255, 255, 0.3);
+  font-style: italic;
+}
+
+/* ═══ Interaction Timeline (person summary tab) ═══ */
+.interaction-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.interaction-item {
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+}
+.interaction-date {
+  color: rgba(255, 255, 255, 0.35);
+  margin-right: 8px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.interaction-title {
+  color: rgba(255, 255, 255, 0.75);
+}
+.interaction-context {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 11px;
+  margin-top: 2px;
+}
+.interaction-more {
+  color: rgba(59, 130, 246, 0.6);
+  font-size: 11px;
+  padding-top: 6px;
+  cursor: pointer;
+}
+.interaction-more:hover {
+  color: rgba(59, 130, 246, 0.9);
 }
 
 /* ═══ Responsive: panels full-width on mobile ═══ */

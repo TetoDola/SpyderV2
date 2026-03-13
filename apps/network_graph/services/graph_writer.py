@@ -8,17 +8,22 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from itertools import combinations
 
 from django.db import transaction
+from django.db.models import Q
 
 from apps.network_graph.dsl import DSLContext, connect, create_node, update_profile
-from apps.network_graph.models import Ingestion, Node
+from apps.network_graph.models import Connection, Ingestion, Node
 from apps.network_graph.schema import (
-    EDGE_ATTENDED,
     EDGE_DISCUSSED,
     EDGE_KNOWS,
     EDGE_WORKS_AT,
+    VALID_EDGE_TYPES,
 )
+
+# Edge types where source/target order doesn't matter — dedup both directions
+_SYMMETRIC_EDGE_TYPES = {"KNOWS", "PARTNERED_WITH", "RELATED_TO"}
 from apps.network_graph.services.resolution import ResolvedEntity
 
 logger = logging.getLogger(__name__)
@@ -55,7 +60,7 @@ def write_graph(
     meeting_node = _create_meeting_node(ctx, ingestion, meeting_context)
 
     # Create edges
-    _create_person_meeting_edges(ctx, resolved_people, meeting_node)
+    _create_attendee_knows_edges(ctx, resolved_people, meeting_node)
     _create_person_company_edges(ctx, resolved_people, resolved_companies, entity_map)
     _create_relationship_edges(ctx, extracted_json, entity_map)
     _create_company_meeting_edges(ctx, resolved_companies, meeting_node)
@@ -112,19 +117,94 @@ def _create_meeting_node(
     return create_node(ctx, node_type="MEETING", title=title, properties=properties)
 
 
-def _create_person_meeting_edges(
+def _create_attendee_knows_edges(
     ctx: DSLContext,
     resolved_people: list[ResolvedEntity],
     meeting_node: Node,
 ) -> None:
-    """Create ATTENDED edges: person → meeting."""
-    for person in resolved_people:
-        connect(
-            ctx,
-            source_id=person.node_id,
-            target_id=str(meeting_node.pk),
-            relationship_label=EDGE_ATTENDED,
-        )
+    """Create pairwise KNOWS edges between all meeting attendees.
+
+    For N attendees this produces N*(N-1)/2 edges.  If a KNOWS edge
+    already exists between two people, the meeting is appended to
+    its metadata instead of creating a duplicate.
+    """
+    if len(resolved_people) < 2:
+        return
+
+    meeting_id = str(meeting_node.pk)
+    meeting_title = meeting_node.title or "Untitled meeting"
+    meeting_date = ""
+    if isinstance(meeting_node.properties, dict):
+        meeting_date = str(meeting_node.properties.get("Date", ""))
+
+    attendee_ids = [p.node_id for p in resolved_people]
+
+    for id_a, id_b in combinations(attendee_ids, 2):
+        # Check for existing KNOWS edge in either direction
+        existing = Connection.objects.filter(
+            Q(source_id=id_a, target_id=id_b) | Q(source_id=id_b, target_id=id_a),
+            relationship_label=EDGE_KNOWS,
+        ).first()
+
+        if existing:
+            _append_meeting_to_edge(existing, meeting_node)
+            ctx._log(
+                "CONNECT",
+                source_id=id_a,
+                target_id=id_b,
+                label=EDGE_KNOWS,
+                created=False,
+            )
+        else:
+            conn = connect(ctx, source_id=id_a, target_id=id_b, relationship_label=EDGE_KNOWS)
+            conn.metadata = {
+                "meetings": [
+                    {
+                        "meeting_node_id": meeting_id,
+                        "title": meeting_title,
+                        "date": meeting_date,
+                        "context": "",
+                    }
+                ],
+                "first_met": meeting_date,
+                "interaction_count": 1,
+                "last_interaction": meeting_date,
+            }
+            conn.save(update_fields=["metadata"])
+
+
+def _append_meeting_to_edge(connection: Connection, meeting_node: Node) -> None:
+    """Append a meeting reference to an existing KNOWS edge's metadata."""
+    if not isinstance(connection.metadata, dict) or not connection.metadata:
+        connection.metadata = {"meetings": [], "interaction_count": 0}
+
+    meetings: list[dict[str, str]] = connection.metadata.get("meetings", [])
+    meeting_id = str(meeting_node.pk)
+
+    # Don't add duplicate meeting references
+    if any(m.get("meeting_node_id") == meeting_id for m in meetings):
+        return
+
+    meeting_date = ""
+    if isinstance(meeting_node.properties, dict):
+        meeting_date = str(meeting_node.properties.get("Date", ""))
+
+    meetings.append(
+        {
+            "meeting_node_id": meeting_id,
+            "title": meeting_node.title or "Untitled meeting",
+            "date": meeting_date,
+            "context": "",
+        }
+    )
+
+    connection.metadata["meetings"] = meetings
+    connection.metadata["interaction_count"] = len(meetings)
+    connection.metadata["last_interaction"] = meeting_date
+    if not connection.metadata.get("first_met"):
+        connection.metadata["first_met"] = meeting_date
+
+    connection.save(update_fields=["metadata"])
 
 
 def _create_person_company_edges(
@@ -184,6 +264,20 @@ def _create_relationship_edges(
             continue
         if from_id == to_id:
             continue
+
+        # Validate label against known vocabulary; fall back to ASSOCIATED_WITH
+        if label not in VALID_EDGE_TYPES:
+            logger.warning("Unknown relationship label '%s' — using ASSOCIATED_WITH", label)
+            label = "ASSOCIATED_WITH"
+
+        # Bidirectional dedup for symmetric edge types
+        if label in _SYMMETRIC_EDGE_TYPES:
+            exists = Connection.objects.filter(
+                Q(source_id=from_id, target_id=to_id) | Q(source_id=to_id, target_id=from_id),
+                relationship_label=label,
+            ).exists()
+            if exists:
+                continue
 
         connect(ctx, source_id=from_id, target_id=to_id, relationship_label=label)
 

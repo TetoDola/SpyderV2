@@ -92,6 +92,7 @@ class Connection(models.Model):
     source = models.ForeignKey(Node, on_delete=models.CASCADE, related_name="outgoing")
     target = models.ForeignKey(Node, on_delete=models.CASCADE, related_name="incoming")
     relationship_label = models.CharField(max_length=100, blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

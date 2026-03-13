@@ -62,7 +62,83 @@ EDGE_KNOWS = "KNOWS"  # person ↔ person (with context label)
 EDGE_WORKS_AT = "WORKS_AT"  # person → company
 EDGE_DISCUSSED = "DISCUSSED"  # meeting → company
 
-VALID_EDGE_TYPES = {EDGE_ATTENDED, EDGE_KNOWS, EDGE_WORKS_AT, EDGE_DISCUSSED}
+VALID_EDGE_TYPES = {
+    # System-generated edges (not produced by extraction prompt)
+    EDGE_ATTENDED,
+    EDGE_DISCUSSED,
+    # Full extraction vocabulary
+    EDGE_KNOWS,
+    EDGE_WORKS_AT,
+    "WORKED_AT",
+    "FOUNDED",
+    "INVESTED_IN",
+    "REPORTS_TO",
+    "RELATED_TO",
+    "PARTNERED_WITH",
+    "ACQUIRED",
+    "ASSOCIATED_WITH",
+}
+
+# ---------------------------------------------------------------------------
+# Full relationship type vocabulary
+# ---------------------------------------------------------------------------
+
+EDGE_TYPES: dict[str, dict[str, object]] = {
+    # Person → Company
+    "WORKS_AT": {
+        "from_type": "PERSON",
+        "to_type": "COMPANY",
+        "description": "Currently employed at",
+    },
+    "WORKED_AT": {
+        "from_type": "PERSON",
+        "to_type": "COMPANY",
+        "description": "Previously employed at",
+    },
+    "FOUNDED": {
+        "from_type": "PERSON",
+        "to_type": "COMPANY",
+        "description": "Created or co-founded",
+    },
+    "INVESTED_IN": {
+        "from_type": None,  # Can be PERSON or COMPANY
+        "to_type": "COMPANY",
+        "description": "Invested in (angel or fund)",
+    },
+    # Person → Person
+    "KNOWS": {
+        "from_type": "PERSON",
+        "to_type": "PERSON",
+        "description": "Professional acquaintance",
+    },
+    "REPORTS_TO": {
+        "from_type": "PERSON",
+        "to_type": "PERSON",
+        "description": "Reports to (direct management)",
+    },
+    "RELATED_TO": {
+        "from_type": "PERSON",
+        "to_type": "PERSON",
+        "description": "Family or personal relationship",
+    },
+    # Company → Company
+    "PARTNERED_WITH": {
+        "from_type": "COMPANY",
+        "to_type": "COMPANY",
+        "description": "Business partnership",
+    },
+    "ACQUIRED": {
+        "from_type": "COMPANY",
+        "to_type": "COMPANY",
+        "description": "Acquired or merged with",
+    },
+    # Generic fallback
+    "ASSOCIATED_WITH": {
+        "from_type": None,  # Any node type
+        "to_type": None,    # Any node type
+        "description": "Generic relationship that doesn't fit other types",
+    },
+}
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +173,17 @@ EXTRACTION_JSON_SCHEMA: dict[str, object] = {
                 "required": ["name"],
             },
         },
+        "products": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "context": {"type": "string"},
+                },
+                "required": ["name"],
+            },
+        },
         "relationships": {
             "type": "array",
             "items": {
@@ -115,6 +202,7 @@ EXTRACTION_JSON_SCHEMA: dict[str, object] = {
                 "date": {"type": ["string", "null"]},
                 "key_points": {"type": "array", "items": {"type": "string"}},
                 "decisions": {"type": "array", "items": {"type": "string"}},
+                "follow_ups": {"type": "array", "items": {"type": "string"}},
             },
         },
     },

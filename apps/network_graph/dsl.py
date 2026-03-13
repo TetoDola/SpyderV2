@@ -116,6 +116,7 @@ def connect(
         source_id=source_id,
         target_id=target_id,
         relationship_label=relationship_label,
+        defaults={"metadata": {}},
     )
     ctx._log(
         "CONNECT",
@@ -244,6 +245,7 @@ def merge_nodes(
             source=target,
             target=conn.target,
             relationship_label=conn.relationship_label,
+            defaults={"metadata": conn.metadata or {}},
         )
         conn.delete()
 
@@ -256,6 +258,7 @@ def merge_nodes(
             source=conn.source,
             target=target,
             relationship_label=conn.relationship_label,
+            defaults={"metadata": conn.metadata or {}},
         )
         conn.delete()
 
